@@ -1,0 +1,24 @@
+#!/bin/zsh
+# Runs ON THE STUDIO, bound to prefix+m in herdr. Summons the voice HUD on the
+# machine the human is actually at (the MacBook): opens the floating window
+# there via SSH; its tunnel dials back to this studio's herdr socket. So one
+# keystroke inside (remote) herdr = voice HUD with a real microphone.
+#
+# Fallback: if the MacBook is unreachable, show a herdr notification instead of
+# failing silently.
+set -uo pipefail
+
+HANDS_HOST="${HERDR_VOICE_HANDS_HOST:-macbook-ts}"
+HANDS_DIR="${HERDR_VOICE_HANDS_DIR:-repos/personal/herdr-voice}"  # relative to remote $HOME
+
+if ssh -o BatchMode=yes -o ConnectTimeout=4 "$HANDS_HOST" \
+  "\$HOME/$HANDS_DIR/bin/herdr-voice-mac" >/dev/null 2>&1; then
+  exit 0
+fi
+
+# MacBook unreachable — tell the user in herdr itself
+if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
+  printf '{"id":"hv","method":"notification.show","params":{"title":"voice: MacBook unreachable","body":"HUD not summoned — check macbook-ts. Text-only: node ~/repos/personal/herdr-voice/src/index.js"}}\n' \
+    | nc -U "$HERDR_SOCKET_PATH" -w 2 >/dev/null 2>&1
+fi
+exit 1

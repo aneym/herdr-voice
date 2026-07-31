@@ -1,0 +1,31 @@
+id = "herdr-voice"
+name = "Voice"
+version = "0.2.0"
+min_herdr_version = "0.7.0"
+description = "Voice control for herdr via the OpenAI Realtime API — speak to create spaces, split panes, apply layouts, and start/prompt agents. Compact HUD with live dictation, clickable toggles, and persisted transcripts."
+platforms = ["macos"]
+
+# Install the single runtime dependency (ws). Runs once at plugin install,
+# after the user confirms the trust preview.
+[[build]]
+command = ["npm", "install", "--omit=dev", "--no-fund", "--no-audit"]
+
+# Open the voice HUD as a floating popup above the current layout. Requires
+# OPENAI_API_KEY in the environment or a .env file in the plugin directory.
+# On a machine with no real microphone (e.g. a headless server), it runs in
+# type-to-command mode automatically.
+[[panes]]
+id = "hud"
+title = "voice"
+placement = "popup"
+width = "60%"
+height = "55%"
+command = ["node", "src/index.js"]
+
+# Remote topology: when the herdr server is on one machine and you sit at
+# another, summon the HUD on the machine with the microphone. Set
+# HERDR_VOICE_HANDS_HOST (ssh host of the machine you sit at) — see README.
+[[actions]]
+id = "summon"
+title = "Summon voice HUD on your local machine"
+command = ["zsh", "bin/herdr-voice-summon"]

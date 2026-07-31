@@ -1,0 +1,40 @@
+#!/bin/zsh
+# Open the floating herdr-voice HUD (dedicated Ghostty window, top-right).
+# Ghostty has no "anchor top-right" and no runtime resize, so we compute the
+# position at launch and write it to an include file voice.conf picks up.
+#
+# Screen width comes from system_profiler (no Apple events → no TCC prompt →
+# safe to run over SSH, which is how prefix+m summons this from the studio).
+# It's slow (~2s), so the logical width is cached after the first run.
+set -euo pipefail
+
+CACHE="$HOME/.cache/herdr-voice"
+mkdir -p "$CACHE"
+
+WIDTH_CACHE="$CACHE/screen-width"
+if [[ -r "$WIDTH_CACHE" ]]; then
+  SCREEN_W=$(<"$WIDTH_CACHE")
+else
+  SP=$(system_profiler SPDisplaysDataType 2>/dev/null || true)
+  # Prefer the scaled ("UI Looks like") resolution; fall back to physical/2
+  # (Retina 2x); final fallback 1512 (14" MacBook Pro default).
+  SCREEN_W=$(print -r -- "$SP" | awk '/UI Looks like/ {print $4; exit}')
+  if [[ -z "${SCREEN_W:-}" ]]; then
+    PHYS=$(print -r -- "$SP" | awk '/Resolution:/ {print $2; exit}')
+    [[ -n "${PHYS:-}" ]] && SCREEN_W=$(( PHYS / 2 )) || SCREEN_W=1512
+  fi
+  print -r -- "$SCREEN_W" > "$WIDTH_CACHE"
+fi
+
+# 58 cells ≈ 58 * 8.4px + padding ≈ 510px at Ghostty's default 13pt mono
+WIN_PX=510
+MARGIN=14
+X=$(( SCREEN_W - WIN_PX - MARGIN ))
+Y=$MARGIN
+
+cat > "$CACHE/position.conf" <<EOF
+window-position-x = $X
+window-position-y = $Y
+EOF
+
+exec open -na Ghostty --args --config-file="$HOME/.config/ghostty/voice.conf"

@@ -1,0 +1,47 @@
+#!/bin/zsh
+# herdr-voice remote launcher (runs on the hands machine, e.g. the MacBook).
+# Forwards the studio's herdr socket over SSH, then runs the voice TUI locally:
+# mic + speakers are local (where you are), herdr control is remote.
+#
+# Usage: herdr-voice-run [--host studio-ts] [extra herdr-voice args...]
+set -euo pipefail
+
+HOST="studio-ts"
+if [[ "${1:-}" == "--host" ]]; then HOST="$2"; shift 2; fi
+
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+RUN_DIR="$HOME/.cache/herdr-voice"
+SOCK="$RUN_DIR/$HOST.sock"
+# ssh -L needs an ABSOLUTE remote socket path (relative paths silently fail —
+# verified). Resolve the remote $HOME once per launch; ControlMaster makes it fast.
+if [[ -n "${HERDR_VOICE_REMOTE_SOCK:-}" ]]; then
+  REMOTE_SOCK="$HERDR_VOICE_REMOTE_SOCK"
+else
+  REMOTE_HOME=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" 'printf %s "$HOME"')
+  REMOTE_SOCK="$REMOTE_HOME/.config/herdr/herdr.sock"
+fi
+mkdir -p "$RUN_DIR"
+
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+sock_alive() {
+  [[ -S "$SOCK" ]] && printf '{"id":"1","method":"ping","params":{}}\n' | nc -U "$SOCK" -w 2 | grep -q pong
+}
+
+if ! sock_alive; then
+  rm -f "$SOCK"
+  # -f -N: background, no command. ControlMaster in ~/.ssh/config makes this fast.
+  ssh -f -N -o ExitOnForwardFailure=yes -o ConnectTimeout=10 \
+    -L "$SOCK:$REMOTE_SOCK" "$HOST"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sock_alive && break
+    sleep 0.3
+  done
+fi
+
+if ! sock_alive; then
+  echo "could not reach herdr on $HOST (tunnel up but no pong from $REMOTE_SOCK)" >&2
+  exit 1
+fi
+
+exec node "$APP_DIR/src/index.js" --socket "$SOCK" "$@"

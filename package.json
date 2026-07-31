@@ -1,0 +1,21 @@
+{
+  "name": "herdr-voice",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test:e2e": "node test/e2e.mjs",
+    "sandbox": "python3 scripts/sandbox.py voicelab"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.21.1"
+  },
+  "bin": {
+    "herdr-voice": "src/index.js"
+  }
+}
