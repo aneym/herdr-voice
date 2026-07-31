@@ -23,11 +23,12 @@ const CTL_DIR = path.join(os.homedir(), '.cache/herdr-voice')
 const CTL_SOCK = process.env.HERDR_VOICE_CTL || path.join(CTL_DIR, 'ctl.sock')
 
 function parseArgs(argv) {
-  const out = { session: undefined, socket: undefined, mic: true }
+  const out = { session: undefined, socket: undefined, mic: true, tunnelHost: undefined }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--session') out.session = argv[++i]
     else if (a === '--socket') out.socket = argv[++i]
+    else if (a === '--tunnel-host') out.tunnelHost = argv[++i]
     else if (a === '--no-mic') out.mic = false
     else if (a === '--device') out.device = argv[++i]
   }
@@ -68,11 +69,29 @@ class Broadcaster {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
-  const { name: sessionName, socket, exists } = resolveSocket(opts)
-  if (!exists) {
-    console.error(`herdr socket not found at ${socket}`)
-    process.exit(1)
+
+  let tunnels = null
+  let socket
+  let sessionName
+  if (opts.tunnelHost) {
+    const { startTunnels } = await import('./tunnels.js')
+    tunnels = startTunnels({ host: opts.tunnelHost, ctlSock: CTL_SOCK, log: console.error })
+    if (!(await tunnels.waitForHerdr())) {
+      console.error(`herdr on ${opts.tunnelHost} unreachable through tunnel`)
+      process.exit(1)
+    }
+    socket = tunnels.herdrSock
+    sessionName = `remote:${opts.tunnelHost}`
+  } else {
+    const resolved = resolveSocket(opts)
+    if (!resolved.exists) {
+      console.error(`herdr socket not found at ${resolved.socket}`)
+      process.exit(1)
+    }
+    socket = resolved.socket
+    sessionName = resolved.name
   }
+
   const { value: apiKey } = loadApiKey()
   const herdr = new HerdrClient(socket)
   await herdr.connect()
@@ -151,6 +170,7 @@ async function main() {
   const shutdown = () => {
     core.stop()
     herdr.close()
+    tunnels?.stop()
     server.close()
     fs.rmSync(CTL_SOCK, { force: true })
     process.exit(0)
