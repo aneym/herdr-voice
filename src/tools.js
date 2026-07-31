@@ -364,7 +364,12 @@ export async function readState(herdr) {
     herdr.request('agent.list'),
   ])
   const snapshot = snapRes.snapshot ?? snapRes
-  const agents = agentsRes.agents ?? []
+  const agents = (agentsRes.agents ?? []).map((agent) => ({
+    ...agent,
+    name: agent.name ?? agent.terminal_title_stripped ?? agent.agent ?? agent.pane_id,
+    kind: agent.kind ?? agent.agent,
+    status: agent.status ?? agent.agent_status,
+  }))
   return { snapshot, agents }
 }
 

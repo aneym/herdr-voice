@@ -2,9 +2,11 @@ import net from 'node:net'
 import { EventEmitter } from 'node:events'
 
 /**
- * Client for the herdr unix-socket JSON API (protocol 17).
+ * Client for the herdr unix-socket JSON API.
  *
  * Wire format is newline-delimited JSON: {id, method, params} -> {id, result} | {id, error}.
+ * The ping response advertises the server's protocol; API clients do not send a
+ * protocol version in their requests.
  *
  * Important protocol detail (verified empirically against herdr 0.7.5): the server
  * closes the connection immediately after answering a request — it is strictly

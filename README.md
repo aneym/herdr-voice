@@ -130,8 +130,10 @@ TCOLS=140 node test/tui-render.mjs       # TUI frame snapshot
 The sandbox needs a properly-sized pty — herdr fails pane spawns with `ghostty error -2`
 when the controlling terminal reports `rows=0/cols=0` (which `script -q /dev/null` does).
 
-## Protocol notes (herdr 0.7.5, protocol 17)
+## Protocol notes (herdr 0.7.5, protocols 17–18)
 
+- The socket API does not version requests. `ping` advertises the server protocol;
+  protocol 18 retains the protocol 17 request shapes used here.
 - Requests are **one-per-connection**: the server closes the socket right after
   responding. `events.subscribe` is the exception and streams until you disconnect.
 - Read payloads nest under `read` (`res.read.text`), and `source: 'recent'` returns only
