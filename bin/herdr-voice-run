@@ -1,47 +1,59 @@
 #!/bin/zsh
 # herdr-voice remote launcher (runs on the hands machine, e.g. the MacBook).
-# Forwards the studio's herdr socket over SSH, then runs the voice TUI locally:
+# Forwards the herdr server's socket over SSH, then runs the voice app locally:
 # mic + speakers are local (where you are), herdr control is remote.
 #
 # Usage: herdr-voice-run [--host studio-ts] [extra herdr-voice args...]
 set -euo pipefail
 
-HOST="studio-ts"
+HOST="${HERDR_VOICE_HOST:-studio-ts}"
 if [[ "${1:-}" == "--host" ]]; then HOST="$2"; shift 2; fi
 
-APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# ${0:A} resolves symlinks (this script is usually invoked via ~/.local/bin) —
+# plain dirname $0 pointed APP_DIR at ~/.local and the app died instantly.
+APP_DIR="${0:A:h:h}"
 RUN_DIR="$HOME/.cache/herdr-voice"
 SOCK="$RUN_DIR/$HOST.sock"
-# ssh -L needs an ABSOLUTE remote socket path (relative paths silently fail —
-# verified). Resolve the remote $HOME once per launch; ControlMaster makes it fast.
-if [[ -n "${HERDR_VOICE_REMOTE_SOCK:-}" ]]; then
-  REMOTE_SOCK="$HERDR_VOICE_REMOTE_SOCK"
-else
-  REMOTE_HOME=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" 'printf %s "$HOME"')
-  REMOTE_SOCK="$REMOTE_HOME/.config/herdr/herdr.sock"
-fi
 mkdir -p "$RUN_DIR"
 
-PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# Ghostty spawns us without a login shell PATH — cover brew and volta node.
+PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$PATH"
+
+# Singleton: one HUD at a time. Killing the previous app exits its command,
+# which closes its Ghostty window — so windows never accumulate.
+pkill -f "herdr-voice.*src/index.js" 2>/dev/null && sleep 0.3 || true
 
 sock_alive() {
   [[ -S "$SOCK" ]] && printf '{"id":"1","method":"ping","params":{}}\n' | nc -U "$SOCK" -w 2 | grep -q pong
 }
 
+fail_hold() {
+  # Keep the window open long enough to read the error instead of vanishing.
+  print -P "%F{red}herdr-voice failed:%f $1"
+  print "press any key to close"
+  read -k 1 || true
+  exit 1
+}
+
 if ! sock_alive; then
   rm -f "$SOCK"
-  # -f -N: background, no command. ControlMaster in ~/.ssh/config makes this fast.
+  # ssh -L needs an ABSOLUTE remote socket path (relative silently fails).
+  if [[ -n "${HERDR_VOICE_REMOTE_SOCK:-}" ]]; then
+    REMOTE_SOCK="$HERDR_VOICE_REMOTE_SOCK"
+  else
+    REMOTE_HOME=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" 'printf %s "$HOME"') \
+      || fail_hold "cannot ssh to $HOST"
+    REMOTE_SOCK="$REMOTE_HOME/.config/herdr/herdr.sock"
+  fi
   ssh -f -N -o ExitOnForwardFailure=yes -o ConnectTimeout=10 \
-    -L "$SOCK:$REMOTE_SOCK" "$HOST"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    -L "$SOCK:$REMOTE_SOCK" "$HOST" || fail_hold "tunnel to $HOST failed"
+  for _ in {1..10}; do
     sock_alive && break
     sleep 0.3
   done
 fi
 
-if ! sock_alive; then
-  echo "could not reach herdr on $HOST (tunnel up but no pong from $REMOTE_SOCK)" >&2
-  exit 1
-fi
+sock_alive || fail_hold "herdr not reachable on $HOST"
 
-exec node "$APP_DIR/src/index.js" --socket "$SOCK" "$@"
+node "$APP_DIR/src/index.js" --socket "$SOCK" "$@" \
+  || fail_hold "app exited (rc=$?) — see above"
