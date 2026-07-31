@@ -105,6 +105,27 @@ supported for plugins that set `min_herdr_version` accordingly.)
 
 ## Upstream case (PR framing for herdrdev/herdr)
 
+**Direct precedent — this is the deferred v2 of upstream's own feature.**
+Issue #1125 ("Temporary floating popup panes for plugins", from discussion
+#782) produced today's `popup` placement, shipped in v0.7.4. In that thread:
+
+- maintainer (ogulcancelik): "it's quite hard to make floating panes proper
+  and robust. **v1 gonna be session wide one floating pane for now** i'm
+  afraid. depending on the request i can explore [more]" — i.e. richer
+  floating panes were *deferred for effort*, not rejected.
+- markjaquith: temporary plugin-owned floating panes "100% fit Herdr".
+- danielo515: wants them for ad-hoc terminals and asks for end-user access
+  without a plugin — both served by this placement (an ad-hoc-terminal plugin
+  becomes trivial).
+- jjuchara: built `herdr-flash` against the popup — the ambient-UI class keeps
+  appearing.
+
+This PR deliberately keeps the maintainer's v1 constraints — **still one
+session-wide floating pane** (singleton), same render layer — and adds only
+the deferred properties: non-modal input and corner anchoring. And it arrives
+implemented with e2e tests, which removes the stated "hard to make proper and
+robust" cost.
+
 - **Ecosystem gap, not a niche want**: every "ambient status" plugin currently
   has no honest placement. Concrete shipped example: herdr-voice (marketplace
   plugin — voice control with a live transcript HUD) must choose between a
