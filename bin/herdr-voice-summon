@@ -47,9 +47,15 @@ if ! ctl_alive; then
   fi
 fi
 
-# open the native HUD pane (plugin must be installed: aneym/herdr-voice)
+# open the HUD (plugin must be installed: aneym/herdr-voice).
+# Prefer the non-modal floating placement (fork feature 7, open-time override);
+# servers without it reject the unknown field -> fall back to the plain popup.
 if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
-  printf '{"id":"hv2","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud"}}\n' \
-    | nc -U "$HERDR_SOCKET_PATH" -w 3 >/dev/null 2>&1 || hnote "voice: engine up" "open the HUD pane manually"
+  resp=$(printf '{"id":"hv2","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud","placement":"floating","anchor":"top-right","width":"42%%","height":14}}\n' \
+    | nc -U "$HERDR_SOCKET_PATH" -w 3 2>/dev/null)
+  if ! print -r -- "$resp" | grep -q '"result"'; then
+    printf '{"id":"hv3","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud"}}\n' \
+      | nc -U "$HERDR_SOCKET_PATH" -w 3 >/dev/null 2>&1 || hnote "voice: engine up" "open the HUD pane manually"
+  fi
 fi
 exit 0
