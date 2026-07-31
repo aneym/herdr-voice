@@ -21,8 +21,8 @@ token-usage badges. `floating` fills that gap.
 
 1. **Rendering.** A floating pane renders above the pane grid (same layer
    discipline as the popup), sized by `width`/`height` (cells or `%`), anchored
-   by `anchor` = `top-right` (default) | `top-left` | `bottom-right` |
-   `bottom-left`, inset by 1 cell from each screen edge it anchors to. It
+   by `anchor` = `top_right` (default) | `top_left` | `bottom_right` |
+   `bottom_left` (snake_case, matching herdr wire convention, e.g. `recent_unwrapped`), inset by 1 cell from each screen edge it anchors to. It
    renders above pane content and below any active modal popup.
 2. **Session-global.** Like the sidebar, a floating pane is independent of the
    workspace tree: switching workspaces/tabs does not close or move it. It
@@ -53,7 +53,7 @@ token-usage badges. `floating` fills that gap.
 id = "hud"
 title = "voice"
 placement = "floating"
-anchor = "top-right"   # optional, floating-only, default top-right
+anchor = "top_right"   # optional, floating-only, default top_right
 width = "42%"          # cells or %
 height = 12
 command = ["node", "src/ui.js"]
@@ -67,7 +67,7 @@ command = ["node", "src/ui.js"]
 
 ```json
 { "plugin_id": "herdr-voice", "entrypoint": "hud",
-  "placement": "floating", "anchor": "top-right",
+  "placement": "floating", "anchor": "top_right",
   "width": "42%", "height": 12 }
 ```
 
