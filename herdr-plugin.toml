@@ -10,12 +10,22 @@ platforms = ["macos"]
 [[build]]
 command = ["npm", "install", "--omit=dev", "--no-fund", "--no-audit"]
 
-# Native HUD pane inside herdr (non-modal — you keep working in other panes).
-# It renders events from a running voice engine over ~/.cache/herdr-voice/ctl.sock:
-# either a local engine (src/engine.js) or one on another machine reverse-tunneled
-# here (see bin/herdr-voice-engine). If no engine is up it waits and says so.
+# Ephemeral floating HUD above the current layout (popup: modal while open,
+# Esc dismisses — the voice engine keeps running so reopen is instant, and the
+# engine auto-mutes the mic when the HUD closes). Renders events from a running
+# engine over ~/.cache/herdr-voice/ctl.sock: local (src/engine.js) or another
+# machine's engine reverse-tunneled here (bin/herdr-voice-engine).
 [[panes]]
 id = "hud"
+title = "voice"
+placement = "popup"
+width = "55%"
+height = "45%"
+command = ["node", "src/ui.js"]
+
+# Docked variant: same HUD as a persistent non-modal split pane.
+[[panes]]
+id = "dock"
 title = "voice"
 placement = "split"
 command = ["node", "src/ui.js"]

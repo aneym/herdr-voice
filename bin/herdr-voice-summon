@@ -22,27 +22,29 @@ ctl_alive() {
   [[ -S "$CTL" ]] && printf '\n' | nc -U "$CTL" -w 1 >/dev/null 2>&1
 }
 
-if ctl_alive; then
-  # toggle OFF
-  printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
-  hnote "voice: stopped"
+# --stop = fully stop the engine (the popup HUD itself is dismissed with Esc;
+# the engine idles muted in the background for instant reopen otherwise)
+if [[ "${1:-}" == "--stop" ]]; then
+  ctl_alive && printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
+  hnote "voice: engine stopped"
   exit 0
 fi
 
-# toggle ON — start the engine in the hands machine's GUI session
-if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HANDS_HOST" \
-  "launchctl kickstart -k gui/\$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then
-  hnote "voice: cannot start engine" "$HANDS_HOST unreachable or LaunchAgent missing"
-  exit 1
-fi
-
-for _ in {1..20}; do
-  ctl_alive && break
-  sleep 0.5
-done
 if ! ctl_alive; then
-  hnote "voice: engine did not come up" "check ~/.cache/herdr-voice/engine.log on $HANDS_HOST"
-  exit 1
+  # start the engine in the hands machine's GUI session
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HANDS_HOST" \
+    "launchctl kickstart -k gui/\$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then
+    hnote "voice: cannot start engine" "$HANDS_HOST unreachable or LaunchAgent missing"
+    exit 1
+  fi
+  for _ in {1..20}; do
+    ctl_alive && break
+    sleep 0.5
+  done
+  if ! ctl_alive; then
+    hnote "voice: engine did not come up" "check ~/.cache/herdr-voice/engine.log on $HANDS_HOST"
+    exit 1
+  fi
 fi
 
 # open the native HUD pane (plugin must be installed: aneym/herdr-voice)

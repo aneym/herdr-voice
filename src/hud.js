@@ -110,6 +110,9 @@ export class VoiceHUD extends EventEmitter {
   }
 
   _input(data) {
+    // a lone ESC byte is the Escape key (sequences always carry more bytes
+    // in the same chunk) — dismiss the HUD, popup-style
+    if (data === '\x1b') return this.emit('quit')
     // mouse first: SGR sequences may arrive batched with keys
     let rest = data
     const mouseRe = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g

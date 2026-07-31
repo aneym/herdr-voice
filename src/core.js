@@ -134,6 +134,14 @@ export async function startCore({ herdr, ui, apiKey, mode = 'voice', wantMic = t
   return {
     session,
     transcript,
+    get micLive() {
+      return Boolean(mic && !mic.muted)
+    },
+    muteMic() {
+      if (!mic || mic.muted) return
+      mic.setMuted(true)
+      ui.setMic({ muted: true, level: 0 })
+    },
     toggleMic() {
       if (!mic) return
       const next = !mic.muted

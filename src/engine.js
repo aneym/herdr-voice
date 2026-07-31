@@ -115,7 +115,15 @@ async function main() {
         handleCommand(cmd)
       }
     })
-    const drop = () => bc.clients.delete(client)
+    const drop = () => {
+      bc.clients.delete(client)
+      // Ephemeral-HUD safety: no attached UI means no visible mic indicator,
+      // so never leave a hot mic running unwatched.
+      if (bc.clients.size === 0 && core.micLive) {
+        core.muteMic()
+        bc.emitCall('notify', 'mic muted — HUD closed')
+      }
+    }
     client.on('close', drop)
     client.on('error', drop)
   })
