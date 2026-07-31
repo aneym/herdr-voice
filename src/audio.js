@@ -102,31 +102,54 @@ export class MicCapture extends EventEmitter {
   }
 }
 
-/** Playback of assistant PCM16 audio through a long-lived ffplay stdin pipe. */
-export class AudioPlayer {
+/**
+ * Playback of assistant PCM16 audio through a long-lived ffplay stdin pipe.
+ * NOTE: ffplay rejects `-ac` (that silently killed audio out for days — every
+ * play exited code 1 unseen). Channel count must be `-ch_layout mono`, and any
+ * player death is surfaced via 'error' and recovered by respawning on next play.
+ */
+export class AudioPlayer extends EventEmitter {
   constructor() {
+    super()
     this.proc = null
-    this.available = true
+    this.failed = false
+  }
+
+  _spawn() {
+    const proc = spawn('ffplay', [
+      '-hide_banner', '-loglevel', 'error',
+      '-nodisp', '-autoexit',
+      '-fflags', 'nobuffer', '-flags', 'low_delay',
+      '-f', 's16le', '-ar', String(SAMPLE_RATE), '-ch_layout', 'mono',
+      '-i', 'pipe:0',
+    ])
+    let err = ''
+    proc.stderr.on('data', (d) => (err += d.toString()))
+    proc.on('error', (e) => {
+      this.failed = true
+      this.emit('error', new Error(`ffplay unavailable: ${e.message}`))
+    })
+    proc.on('close', (code) => {
+      if (this.proc === proc) this.proc = null
+      if (code !== 0 && code !== null && !this.failed) {
+        this.failed = true
+        this.emit('error', new Error(`ffplay exited ${code}: ${err.slice(0, 160)}`))
+      }
+    })
+    proc.stdin.on('error', () => {})
+    return proc
   }
 
   start() {
-    try {
-      this.proc = spawn('ffplay', [
-        '-hide_banner', '-loglevel', 'quiet',
-        '-nodisp', '-autoexit',
-        '-f', 's16le', '-ar', String(SAMPLE_RATE), '-ac', '1',
-        '-i', 'pipe:0',
-      ])
-      this.proc.on('error', () => (this.available = false))
-      this.proc.stdin.on('error', () => {})
-    } catch {
-      this.available = false
-    }
+    this.proc = this._spawn()
     return this
   }
 
   play(base64) {
-    if (!this.available || !this.proc?.stdin.writable) return
+    if (!this.proc?.stdin.writable) {
+      if (this.failed) return
+      this.proc = this._spawn() // respawn after a clean autoexit
+    }
     this.proc.stdin.write(Buffer.from(base64, 'base64'))
   }
 

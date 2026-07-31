@@ -10,12 +10,20 @@ platforms = ["macos"]
 [[build]]
 command = ["npm", "install", "--omit=dev", "--no-fund", "--no-audit"]
 
-# Open the voice HUD as a floating popup above the current layout. Requires
-# OPENAI_API_KEY in the environment or a .env file in the plugin directory.
-# On a machine with no real microphone (e.g. a headless server), it runs in
-# type-to-command mode automatically.
+# Native HUD pane inside herdr (non-modal — you keep working in other panes).
+# It renders events from a running voice engine over ~/.cache/herdr-voice/ctl.sock:
+# either a local engine (src/engine.js) or one on another machine reverse-tunneled
+# here (see bin/herdr-voice-engine). If no engine is up it waits and says so.
 [[panes]]
 id = "hud"
+title = "voice"
+placement = "split"
+command = ["node", "src/ui.js"]
+
+# All-in-one popup (engine + UI in one process on this host). Modal while open;
+# useful on a single machine with a real microphone, or for text-only control.
+[[panes]]
+id = "voice-popup"
 title = "voice"
 placement = "popup"
 width = "60%"

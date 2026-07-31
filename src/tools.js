@@ -299,6 +299,60 @@ export const TOOL_SPECS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'focus_agent',
+    description:
+      'Jump to a running agent — focuses its pane wherever it is. Use when the user says "go to <agent>" or "show me what <agent> is doing".',
+    parameters: {
+      type: 'object',
+      properties: { agent: { type: 'string', description: 'Agent name' } },
+      required: ['agent'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'create_worktree',
+    description:
+      'Create a git worktree for a branch as a new space — the standard way to start parallel work on a repo. Give the branch name and the project/repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        branch: { type: 'string', description: 'Branch name, e.g. "feat-login". Created if missing.' },
+        project: { type: 'string', description: 'Repo name resolved against ~/repos, e.g. "iris"' },
+        base: { type: 'string', description: 'Base branch to fork from (default: repo default branch)' },
+        agent: { type: 'string', description: `Optionally start this agent in it. One of: ${AGENT_KINDS.join(', ')}` },
+      },
+      required: ['branch', 'project'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'close_tab',
+    description: 'Close a tab in a space (kills its panes). Confirmation flow like close_space.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tab: { type: 'string', description: 'Tab label or number within the space' },
+        space: { type: 'string', description: 'Space the tab is in. Omit for current.' },
+        confirm: { type: 'boolean', description: 'Set true only after the user verbally confirmed' },
+      },
+      required: ['tab'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'rename_tab',
+    description: 'Rename a tab in the current space.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tab: { type: 'string', description: 'Tab label or number. Omit for the active tab.' },
+        label: { type: 'string', description: 'New name' },
+      },
+      required: ['label'],
+      additionalProperties: false,
+    },
+  },
 ]
 
 export const REALTIME_TOOLS = TOOL_SPECS.map((t) => ({ type: 'function', ...t }))
@@ -532,6 +586,79 @@ export function createExecutor(herdr, { onNotice } = {}) {
           ...(args.body ? { body: args.body } : {}),
         })
         return { ok: true, notified: args.title }
+
+      case 'focus_agent': {
+        const a = resolveAgent(agents, args.agent)
+        if (!a) {
+          return { ok: false, error: agents.length ? `No agent matching "${args.agent}".` : 'No agents are running.' }
+        }
+        await herdr.request('agent.focus', { target: a.name ?? a.pane_id })
+        return { ok: true, focused: a.name, status: a.status }
+      }
+
+      case 'create_worktree': {
+        const cwd = resolveCwd(args.project)
+        if (!cwd) return { ok: false, error: `Could not find a project matching "${args.project}".` }
+        const res = await herdr.request(
+          'worktree.create',
+          {
+            branch: args.branch,
+            cwd,
+            focus: true,
+            ...(args.base ? { base: args.base } : {}),
+          },
+          { timeoutMs: 60000 } // git clone/checkout can be slow
+        )
+        const out = {
+          ok: true,
+          worktree: args.branch,
+          space: res.workspace?.label,
+          path: res.path ?? res.worktree?.path,
+        }
+        if (args.agent && res.workspace) {
+          const panes = await herdr.request('pane.list', { workspace_id: res.workspace.workspace_id })
+          const paneId = panes.panes?.[0]?.pane_id
+          if (paneId) {
+            const agentName = `${args.agent}-${args.branch}`.slice(0, 30)
+            await herdr.request('agent.start', { kind: args.agent, name: agentName, pane_id: paneId }, { timeoutMs: 30000 })
+            out.agent_started = agentName
+          }
+        }
+        notice(`worktree ${args.branch}`)
+        return out
+      }
+
+      case 'close_tab': {
+        const w = args.space ? needSpace(args.space) : needSpace(undefined)
+        const tabs = (snapshot.tabs ?? []).filter((t) => t.workspace_id === w.workspace_id)
+        const q = norm(args.tab)
+        const t =
+          tabs.find((x) => norm(x.label) === q) ??
+          tabs.find((x) => String(x.number) === q) ??
+          tabs.find((x) => norm(x.label).includes(q))
+        if (!t) return { ok: false, error: `No tab matching "${args.tab}" in ${w.label}.` }
+        if (!args.confirm) {
+          return {
+            ok: false,
+            confirmation_required: true,
+            message: `Closing tab "${t.label}" kills ${t.pane_count} pane(s). Confirm out loud, then call again with confirm=true.`,
+          }
+        }
+        await herdr.request('tab.close', { tab_id: t.tab_id })
+        return { ok: true, closed_tab: t.label, space: w.label }
+      }
+
+      case 'rename_tab': {
+        const w = needSpace(undefined)
+        const tabs = (snapshot.tabs ?? []).filter((t) => t.workspace_id === w.workspace_id)
+        const t = args.tab
+          ? (tabs.find((x) => norm(x.label) === norm(args.tab)) ??
+             tabs.find((x) => String(x.number) === norm(args.tab)))
+          : tabs.find((x) => x.tab_id === w.active_tab_id) ?? tabs[0]
+        if (!t) return { ok: false, error: `No tab matching "${args.tab ?? '(active)'}".` }
+        await herdr.request('tab.rename', { tab_id: t.tab_id, label: args.label })
+        return { ok: true, renamed_tab: t.label, to: args.label }
+      }
 
       default:
         return { ok: false, error: `Unknown tool "${name}"` }

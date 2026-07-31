@@ -1,24 +1,53 @@
 #!/bin/zsh
-# Runs ON THE STUDIO, bound to prefix+m in herdr. Summons the voice HUD on the
-# machine the human is actually at (the MacBook): opens the floating window
-# there via SSH; its tunnel dials back to this studio's herdr socket. So one
-# keystroke inside (remote) herdr = voice HUD with a real microphone.
-#
-# Fallback: if the MacBook is unreachable, show a herdr notification instead of
-# failing silently.
+# Runs ON THE HERDR SERVER (studio), bound to prefix+m. TOGGLE:
+#   engine off -> start it on the hands machine (LaunchAgent, GUI session so
+#                 mic TCC works), wait for its reverse-tunneled control socket,
+#                 open the native HUD pane inside herdr.
+#   engine on  -> stop it (HUD pane notices and reports engine gone).
+# The HUD is a normal herdr pane (plugin pane, placement=split) — non-modal,
+# lives inside herdr, no OS floating windows.
 set -uo pipefail
 
 HANDS_HOST="${HERDR_VOICE_HANDS_HOST:-macbook-ts}"
-HANDS_DIR="${HERDR_VOICE_HANDS_DIR:-repos/personal/herdr-voice}"  # relative to remote $HOME
+AGENT_LABEL="${HERDR_VOICE_AGENT_LABEL:-com.aneyman.herdr-voice-engine}"
+CTL="$HOME/.cache/herdr-voice/ctl.sock"
 
-if ssh -o BatchMode=yes -o ConnectTimeout=4 "$HANDS_HOST" \
-  "\$HOME/$HANDS_DIR/bin/herdr-voice-mac" >/dev/null 2>&1; then
+hnote() {
+  [[ -n "${HERDR_SOCKET_PATH:-}" ]] || return 0
+  printf '{"id":"hv","method":"notification.show","params":{"title":"%s","body":"%s"}}\n' "$1" "${2:-}" \
+    | nc -U "$HERDR_SOCKET_PATH" -w 2 >/dev/null 2>&1
+}
+
+ctl_alive() {
+  [[ -S "$CTL" ]] && printf '\n' | nc -U "$CTL" -w 1 >/dev/null 2>&1
+}
+
+if ctl_alive; then
+  # toggle OFF
+  printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
+  hnote "voice: stopped"
   exit 0
 fi
 
-# MacBook unreachable — tell the user in herdr itself
-if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
-  printf '{"id":"hv","method":"notification.show","params":{"title":"voice: MacBook unreachable","body":"HUD not summoned — check macbook-ts. Text-only: node ~/repos/personal/herdr-voice/src/index.js"}}\n' \
-    | nc -U "$HERDR_SOCKET_PATH" -w 2 >/dev/null 2>&1
+# toggle ON — start the engine in the hands machine's GUI session
+if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HANDS_HOST" \
+  "launchctl kickstart -k gui/\$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then
+  hnote "voice: cannot start engine" "$HANDS_HOST unreachable or LaunchAgent missing"
+  exit 1
 fi
-exit 1
+
+for _ in {1..20}; do
+  ctl_alive && break
+  sleep 0.5
+done
+if ! ctl_alive; then
+  hnote "voice: engine did not come up" "check ~/.cache/herdr-voice/engine.log on $HANDS_HOST"
+  exit 1
+fi
+
+# open the native HUD pane (plugin must be installed: aneym/herdr-voice)
+if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
+  printf '{"id":"hv2","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud"}}\n' \
+    | nc -U "$HERDR_SOCKET_PATH" -w 3 >/dev/null 2>&1 || hnote "voice: engine up" "open the HUD pane manually"
+fi
+exit 0
