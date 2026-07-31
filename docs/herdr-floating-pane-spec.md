@@ -81,6 +81,9 @@ supported for plugins that set `min_herdr_version` accordingly.)
 
 ## Non-goals (v1)
 
+- `pane.send_input` on floating ids (grid-only in v1; `pane.send_text`/`send_keys`
+  cover the addressable-input need — verified ruling 2026-07-31).
+
 - Dragging/resizing with the mouse.
 - Multiple simultaneous floating panes per plugin pane id.
 - Persistence across server restarts.
