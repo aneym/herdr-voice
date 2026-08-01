@@ -16,6 +16,7 @@ const CTL_SOCK =
     : process.env.HERDR_VOICE_CTL || path.join(os.homedir(), '.cache/herdr-voice/ctl.sock')
 
 const hud = new VoiceHUD({ sessionName: 'engine', model: 'voice' }).start()
+hud.setStatus({ state: 'waiting for engine' })
 
 let sock = null
 let closed = false
@@ -26,11 +27,24 @@ function connect() {
   sock = net.createConnection(CTL_SOCK)
   sock.setEncoding('utf8')
   let buf = ''
+  let sawEvent = false
+
+  // A stale tunnel endpoint (dead ssh/sshd still holding the socket) ACCEPTS
+  // the connection but nothing is behind it — the engine always replays state
+  // immediately, so a silent connection is a dead one.
+  const handshake = setTimeout(() => {
+    if (!sawEvent) sock.destroy(new Error('no engine behind socket'))
+  }, 4000)
 
   sock.on('connect', () => {
-    retries = 0
+    hud.setStatus({ state: 'connecting' })
   })
   sock.on('data', (chunk) => {
+    if (!sawEvent) {
+      sawEvent = true
+      retries = 0
+      clearTimeout(handshake)
+    }
     buf += chunk
     let idx
     while ((idx = buf.indexOf('\n')) !== -1) {
@@ -47,10 +61,13 @@ function connect() {
       if (typeof fn === 'function') fn.apply(hud, msg.a ?? [])
     }
   })
+  let downHandled = false
   const onDown = () => {
-    if (closed) return
-    hud.setStatus({ state: retries === 0 ? 'engine gone' : 'waiting for engine' })
-    if (retries === 0) hud.addSystem('engine not reachable — start voice (prefix+m) or herdr-voice-mac')
+    if (closed || downHandled) return
+    downHandled = true
+    clearTimeout(handshake)
+    hud.setStatus({ state: 'engine unreachable' })
+    if (retries === 0) hud.addSystem('engine not responding — press prefix+m to (re)start voice')
     retries++
     setTimeout(connect, Math.min(5000, 500 * retries))
   }

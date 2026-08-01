@@ -75,7 +75,7 @@ export class VoiceHUD extends EventEmitter {
     this.model = model
     this.status = { state: 'connecting' }
     this.micLevel = 0
-    this.levelHistory = new Array(24).fill(0)
+    this.levelHistory = new Array(18).fill(0)
     this.muted = true
     this.micAvailable = false
     this.soundOn = true
@@ -170,8 +170,11 @@ export class VoiceHUD extends EventEmitter {
   }
   setMic({ level, muted, available }) {
     if (level !== undefined) {
-      this.micLevel = level
-      this.levelHistory.push(level)
+      // envelope follower: fast attack, slow decay — speech reads as a wave,
+      // not a jitter of disconnected bars
+      const prev = this.micLevel
+      this.micLevel = level > prev ? level : prev * 0.72
+      this.levelHistory.push(this.micLevel)
       this.levelHistory.shift()
     }
     if (muted !== undefined) this.muted = muted
@@ -188,7 +191,6 @@ export class VoiceHUD extends EventEmitter {
   }
   setSpeaking(v) {
     this.speaking = v
-    if (!v) this.levelHistory.fill(0)
     this.dirty = true
   }
   setPartial(text) {
@@ -258,12 +260,15 @@ export class VoiceHUD extends EventEmitter {
       : this.status.state === 'ready'
         ? `${C.dim}${this.muted || !this.micAvailable ? 'standby' : 'live'}${C.off}`
         : `${C.dim}${this.status.state}${C.off}`
-    const meterW = Math.min(26, W - 24)
+    // dictation-strip waveform: kernel-smoothed so adjacent bars flow into
+    // each other, sqrt loudness curve so quiet speech still reads
+    const meterW = Math.min(18, W - 26)
     const hist = this.levelHistory.slice(-meterW)
     const meter = hist
-      .map((l) => {
-        const g = METER_GLYPHS[Math.min(8, Math.round(l * 8))]
-        return (l > 0.02 ? C.accent : C.faint) + g
+      .map((l, i) => {
+        const s = (hist[i - 1] ?? l) * 0.25 + l * 0.5 + (hist[i + 1] ?? l) * 0.25
+        const g = METER_GLYPHS[Math.min(8, Math.round(Math.sqrt(Math.min(1, s * 1.6)) * 8))]
+        return (s > 0.015 ? C.accent : C.faint) + g
       })
       .join('')
     rows.push(` ${dot} ${label}  ${meter}${C.off}  ${C.faint}${this.sessionName}${C.off}`)

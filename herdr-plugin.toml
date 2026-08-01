@@ -19,8 +19,8 @@ command = ["npm", "install", "--omit=dev", "--no-fund", "--no-audit"]
 id = "hud"
 title = "voice"
 placement = "popup"
-width = "55%"
-height = "45%"
+width = 66
+height = 13
 command = ["node", "src/ui.js"]
 
 # Docked variant: same HUD as a persistent non-modal split pane.

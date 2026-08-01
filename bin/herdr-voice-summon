@@ -1,16 +1,24 @@
 #!/bin/zsh
-# Runs ON THE HERDR SERVER (studio), bound to prefix+m. TOGGLE:
-#   engine off -> start it on the hands machine (LaunchAgent, GUI session so
-#                 mic TCC works), wait for its reverse-tunneled control socket,
-#                 open the native HUD pane inside herdr.
-#   engine on  -> stop it (HUD pane notices and reports engine gone).
-# The HUD is a normal herdr pane (plugin pane, placement=split) — non-modal,
-# lives inside herdr, no OS floating windows.
+# Runs ON THE HERDR SERVER host, bound to prefix+m.
+#
+# Engine placement (where the mic/speakers live), in order:
+#   1. engine already running (local ctl.sock answers a handshake) -> reuse
+#   2. this machine has a real microphone -> local engine (you're AT the server)
+#   3. HANDS_HOST reachable -> remote engine there (LaunchAgent, GUI session)
+#   4. neither -> local engine anyway (text + tools still work)
+# Then open the HUD: floating top-right when the server supports it (fork
+# feature 7), else the popup fallback.
+#
+# --stop = fully stop the engine. (Esc just dismisses the HUD; the engine
+# idles muted for instant reopen.)
 set -uo pipefail
 
 HANDS_HOST="${HERDR_VOICE_HANDS_HOST:-macbook-ts}"
+HANDS_DIR="${HERDR_VOICE_HANDS_DIR:-repos/personal/herdr-voice}"
 AGENT_LABEL="${HERDR_VOICE_AGENT_LABEL:-com.aneyman.herdr-voice-engine}"
+APP_DIR="${0:A:h:h}"
 CTL="$HOME/.cache/herdr-voice/ctl.sock"
+PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$PATH"
 
 hnote() {
   [[ -n "${HERDR_SOCKET_PATH:-}" ]] || return 0
@@ -18,42 +26,59 @@ hnote() {
     | nc -U "$HERDR_SOCKET_PATH" -w 2 >/dev/null 2>&1
 }
 
+# Handshake, not just connect: a dead tunnel's socket still ACCEPTS — only a
+# live engine sends its state replay within the first second.
 ctl_alive() {
-  [[ -S "$CTL" ]] && printf '\n' | nc -U "$CTL" -w 1 >/dev/null 2>&1
+  [[ -S "$CTL" ]] || return 1
+  local out
+  out=$(printf '\n' | nc -U "$CTL" -w 1 2>/dev/null | head -c 20)
+  [[ -n "$out" ]]
 }
 
-# --stop = fully stop the engine (the popup HUD itself is dismissed with Esc;
-# the engine idles muted in the background for instant reopen otherwise)
 if [[ "${1:-}" == "--stop" ]]; then
   ctl_alive && printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
+  pkill -f "herdr-voice.*src/engine.js" 2>/dev/null || true
   hnote "voice: engine stopped"
   exit 0
 fi
 
+has_real_mic() {
+  ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+    | sed -n '/audio devices/,$p' | grep -qiE '\[[0-9]+\] .*(microphone|airpods|usb|external|built-in)'
+}
+
+start_local_engine() {
+  rm -f "$CTL"
+  ( nohup node "$APP_DIR/src/engine.js" > "$HOME/.cache/herdr-voice/engine-local.log" 2>&1 & ) </dev/null
+}
+
 if ! ctl_alive; then
-  # start the engine in the hands machine's GUI session
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HANDS_HOST" \
+  rm -f "$CTL"
+  if has_real_mic; then
+    start_local_engine
+  elif ssh -o BatchMode=yes -o ConnectTimeout=4 "$HANDS_HOST" \
     "launchctl kickstart -k gui/\$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then
-    hnote "voice: cannot start engine" "$HANDS_HOST unreachable or LaunchAgent missing"
-    exit 1
+    : # remote engine starting; its reverse tunnel will populate $CTL
+  else
+    hnote "voice: $HANDS_HOST unreachable" "running engine here (no mic — text only)"
+    start_local_engine
   fi
-  for _ in {1..20}; do
+  for _ in {1..24}; do
     ctl_alive && break
     sleep 0.5
   done
   if ! ctl_alive; then
-    hnote "voice: engine did not come up" "check ~/.cache/herdr-voice/engine.log on $HANDS_HOST"
+    hnote "voice: engine did not come up" "see ~/.cache/herdr-voice/engine-local.log or engine.log on $HANDS_HOST"
     exit 1
   fi
 fi
 
-# open the HUD (plugin must be installed: aneym/herdr-voice).
-# Prefer the non-modal floating placement (fork feature 7, open-time override);
-# servers without it reject the unknown field -> fall back to the plain popup.
+# Open the HUD. Prefer the non-modal floating placement (fork feature 7);
+# servers without it reject the field -> fall back to the modal popup.
 if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
-  resp=$(printf '{"id":"hv2","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud","placement":"floating","anchor":"top_right","width":"42%%","height":14}}\n' \
+  RES=$(printf '{"id":"hv2","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud","placement":"floating","anchor":"top_right","width":64,"height":12}}\n' \
     | nc -U "$HERDR_SOCKET_PATH" -w 3 2>/dev/null)
-  if ! print -r -- "$resp" | grep -q '"result"'; then
+  if ! print -r -- "$RES" | grep -q '"result"'; then
     printf '{"id":"hv3","method":"plugin.pane.open","params":{"plugin_id":"herdr-voice","entrypoint":"hud"}}\n' \
       | nc -U "$HERDR_SOCKET_PATH" -w 3 >/dev/null 2>&1 || hnote "voice: engine up" "open the HUD pane manually"
   fi
