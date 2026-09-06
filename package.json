@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "test:e2e": "node test/e2e.mjs",
-    "sandbox": "python3 scripts/sandbox.py voicelab"
+    "sandbox": "python3 scripts/sandbox.py voicelab",
+    "test:component": "for f in test/component/*.test.mjs; do echo \"--- $f\"; node \"$f\" || exit 1; done",
+    "test": "npm run test:component"
   },
   "keywords": [],
   "author": "",

@@ -3,6 +3,54 @@ import { EventEmitter } from 'node:events'
 import { SAMPLE_RATE } from './config.js'
 
 /**
+ * Parse the audio devices out of `ffmpeg -f avfoundation -list_devices true`.
+ * Split out from the capture class so it can be tested against recorded output:
+ * this runs only on macOS, and the shape of that output is the sort of thing
+ * that changes under you with an ffmpeg upgrade.
+ */
+export function parseAvfoundationDevices(stderr) {
+  const devices = []
+  // The video devices are listed first, under their own heading, and are not
+  // microphones however plausible their names look.
+  const section = String(stderr).split('AVFoundation audio devices:')[1] ?? ''
+  for (const line of section.split('\n')) {
+    const m = line.match(/\[(\d+)\]\s+(.+?)\s*$/)
+    if (m) devices.push({ index: Number(m[1]), name: m[2] })
+  }
+  return devices
+}
+
+/** ffmpeg arguments for capturing a microphone as PCM16 mono. */
+export function captureArgs({ device, sampleRate = SAMPLE_RATE }) {
+  return [
+    '-hide_banner', '-loglevel', 'error',
+    '-f', 'avfoundation',
+    '-i', device,
+    '-ar', String(sampleRate),
+    '-ac', '1',
+    '-f', 's16le',
+    '-',
+  ]
+}
+
+/**
+ * ffplay arguments for playing raw PCM16 mono from a pipe.
+ *
+ * ffplay REJECTS `-ac`, which silently killed audio output for days — every
+ * play exited 1, unseen. The channel count has to be `-ch_layout mono`. The
+ * test for this exists to stop that coming back.
+ */
+export function playerArgs({ sampleRate = SAMPLE_RATE } = {}) {
+  return [
+    '-hide_banner', '-loglevel', 'error',
+    '-nodisp', '-autoexit',
+    '-fflags', 'nobuffer', '-flags', 'low_delay',
+    '-f', 's16le', '-ar', String(sampleRate), '-ch_layout', 'mono',
+    '-i', 'pipe:0',
+  ]
+}
+
+/**
  * Mic capture via ffmpeg/avfoundation -> PCM16 mono @24k -> base64 chunks.
  *
  * macOS gates microphone access per-application (TCC). A terminal that has never
@@ -24,15 +72,7 @@ export class MicCapture extends EventEmitter {
       const p = spawn('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''])
       let buf = ''
       p.stderr.on('data', (d) => (buf += d.toString()))
-      p.on('close', () => {
-        const audio = []
-        const section = buf.split('AVFoundation audio devices:')[1] ?? ''
-        for (const line of section.split('\n')) {
-          const m = line.match(/\[(\d+)\]\s+(.+?)\s*$/)
-          if (m) audio.push({ index: Number(m[1]), name: m[2] })
-        }
-        resolve(audio)
-      })
+      p.on('close', () => resolve(parseAvfoundationDevices(buf)))
       p.on('error', () => resolve([]))
     })
   }
@@ -52,16 +92,7 @@ export class MicCapture extends EventEmitter {
   }
 
   start() {
-    const args = [
-      '-hide_banner', '-loglevel', 'error',
-      '-f', 'avfoundation',
-      '-i', this.device,
-      '-ar', String(SAMPLE_RATE),
-      '-ac', '1',
-      '-f', 's16le',
-      '-',
-    ]
-    const proc = spawn('ffmpeg', args)
+    const proc = spawn('ffmpeg', captureArgs({ device: this.device }))
     this.proc = proc
 
     // bytes per chunk: 2 bytes/sample * rate * ms/1000
@@ -104,9 +135,8 @@ export class MicCapture extends EventEmitter {
 
 /**
  * Playback of assistant PCM16 audio through a long-lived ffplay stdin pipe.
- * NOTE: ffplay rejects `-ac` (that silently killed audio out for days — every
- * play exited code 1 unseen). Channel count must be `-ch_layout mono`, and any
- * player death is surfaced via 'error' and recovered by respawning on next play.
+ * Any player death is surfaced via 'error' and recovered by respawning on the
+ * next play. The argument list, and the trap in it, are in playerArgs above.
  */
 export class AudioPlayer extends EventEmitter {
   constructor() {
@@ -116,13 +146,7 @@ export class AudioPlayer extends EventEmitter {
   }
 
   _spawn() {
-    const proc = spawn('ffplay', [
-      '-hide_banner', '-loglevel', 'error',
-      '-nodisp', '-autoexit',
-      '-fflags', 'nobuffer', '-flags', 'low_delay',
-      '-f', 's16le', '-ar', String(SAMPLE_RATE), '-ch_layout', 'mono',
-      '-i', 'pipe:0',
-    ])
+    const proc = spawn('ffplay', playerArgs())
     let err = ''
     proc.stderr.on('data', (d) => (err += d.toString()))
     proc.on('error', (e) => {
