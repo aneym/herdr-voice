@@ -679,9 +679,14 @@ export function createExecutor(herdr, { onNotice } = {}) {
         } catch (e) {
           // exec rejects on non-zero exit (with captured output in e) and on
           // timeout (e.killed). Either way the captured output is the payload.
+          //
+          // `ok` follows the COMMAND, not the tool call. Reporting a failed
+          // build as ok:true because the tool itself worked is how the model
+          // ends up telling the user the tests passed: it reads the flag before
+          // it reads the exit code.
           notice(`ran ${args.command} (exit ${e.code ?? 'timeout'})`)
           return {
-            ok: !e.killed,
+            ok: false,
             ran: args.command,
             exit_code: typeof e.code === 'number' ? e.code : undefined,
             timed_out: !!e.killed,
