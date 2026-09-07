@@ -395,6 +395,19 @@ export const TOOL_SPECS = [
 export const REALTIME_TOOLS = TOOL_SPECS.map((t) => ({ type: 'function', ...t }))
 
 /** Compact state summary used both for grounding the model and for the TUI. */
+/**
+ * How to address an agent when talking to herdr.
+ *
+ * The pane id is what the server resolves. The name is ours — synthesised from
+ * the terminal title so a person can say it — and herdr 0.8 stopped returning a
+ * `name` field at all, so addressing agents by it started failing with
+ * agent_not_found on every call while they still listed and displayed normally.
+ * The name is kept for matching what the user said, and never sent.
+ */
+function agentTarget(a) {
+  return a.pane_id ?? a.name
+}
+
 export async function readState(herdr) {
   const [snapRes, agentsRes] = await Promise.all([
     herdr.request('session.snapshot'),
@@ -588,7 +601,7 @@ export function createExecutor(herdr, { onNotice } = {}) {
         if (!a) {
           return { ok: false, error: agents.length ? `No agent matching "${args.agent}".` : 'No agents are running.' }
         }
-        const target = a.name ?? a.pane_id
+        const target = agentTarget(a)
         const before = await readAgentScreen(herdr, target).catch(() => '')
         await herdr.request('agent.prompt', { target, text: args.text })
         notice(`prompted ${a.name}`)
@@ -602,7 +615,7 @@ export function createExecutor(herdr, { onNotice } = {}) {
           await sleep(700)
           const [status, screen] = await Promise.all([
             readState(herdr)
-              .then((s) => s.agents.find((x) => (x.name ?? x.pane_id) === target)?.status)
+              .then((s) => s.agents.find((x) => agentTarget(x) === target)?.status)
               .catch(() => undefined),
             readAgentScreen(herdr, target).catch(() => ''),
           ])
@@ -625,7 +638,7 @@ export function createExecutor(herdr, { onNotice } = {}) {
         // `visible` = what is on screen now. `recent` only returns output since the
         // last read, so it comes back empty on a first read — wrong for "what is it doing?".
         const res = await herdr.request('agent.read', {
-          target: a.name ?? a.pane_id,
+          target: agentTarget(a),
           source: 'visible',
           format: 'text',
           strip_ansi: true,
@@ -710,7 +723,7 @@ export function createExecutor(herdr, { onNotice } = {}) {
         if (!a) {
           return { ok: false, error: agents.length ? `No agent matching "${args.agent}".` : 'No agents are running.' }
         }
-        await herdr.request('agent.focus', { target: a.name ?? a.pane_id })
+        await herdr.request('agent.focus', { target: agentTarget(a) })
         return { ok: true, focused: a.name, status: a.status }
       }
 

@@ -53,7 +53,7 @@ const check = (name, ok, detail) => {
   let polls = 0
   const herdr = fakeHerdr({
     agents: [{ name: 'reviewer', pane_id: 'p1', status: 'idle' }],
-    screens: { reviewer: () => (polls > 2 ? 'the tests pass, 41 of them' : 'waiting') },
+    screens: { p1: () => (polls > 2 ? 'the tests pass, 41 of them' : 'waiting') },
   })
   const realRequest = herdr.request.bind(herdr)
   herdr.request = async (method, params) => {
@@ -79,11 +79,28 @@ const check = (name, ok, detail) => {
 {
   const herdr = fakeHerdr({
     agents: [{ name: 'idler', pane_id: 'p1', status: 'idle' }],
-    screens: { idler: 'nothing here' },
+    screens: { p1: 'nothing here' },
   })
   const run = createExecutor(herdr, { onNotice: () => {} })
   const res = await run('prompt_agent', { agent: 'idler', text: 'hello' })
   check('an agent that never worked is reported honestly', res.turn !== 'completed', res.turn)
+}
+
+// ---- agents are addressed by pane id, not by the name we made up ----
+{
+  // herdr 0.8 stopped returning a `name` field. The name shown to the user is
+  // synthesised from the terminal title so they can say it out loud; sending it
+  // back as the target is what broke every agent tool with agent_not_found
+  // while the agents still listed and displayed perfectly.
+  const herdr = fakeHerdr({
+    agents: [{ pane_id: 'p1', agent: 'claude', terminal_title_stripped: 'reviewer', status: 'idle' }],
+    screens: { p1: 'all 41 tests pass' },
+  })
+  const run = createExecutor(herdr, { onNotice: () => {} })
+  const res = await run('read_agent', { agent: 'reviewer' })
+  const target = herdr.sent('agent.read')[0]?.target
+  check('an agent with no name of its own is still found by what it is called', res.ok !== false, JSON.stringify(res).slice(0, 80))
+  check('and is addressed by pane id, not by that name', target === 'p1', `target=${JSON.stringify(target)}`)
 }
 
 const failed = results.filter((r) => !r).length
