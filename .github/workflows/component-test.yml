@@ -7,7 +7,15 @@ on:
 
 jobs:
   component:
-    runs-on: ubuntu-latest
+    # The audio layer is written for two platforms and the tests for it are
+    # pure, so they cost seconds on both. Running them only on Linux would leave
+    # the macOS half — which is the half most people use — unverified by
+    # anything except the maintainer's own machine.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
