@@ -1,0 +1,20 @@
+name: component-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --omit=dev --no-fund --no-audit
+      # No audio hardware, no microphone permission, no API key: these tests
+      # cover the parts that decide which device is used and how the player is
+      # invoked, which is where silent failures live.
+      - run: npm run test:component
