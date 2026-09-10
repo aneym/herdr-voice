@@ -13,7 +13,7 @@ import { TranscriptStore, copyToClipboard } from './transcript.js'
  * notify/addUser/updateAssistant/addSystem/addToolCall/updateToolCall/
  * setHerdrState. Returns handles the host wires to its input events.
  */
-export async function startCore({ herdr, ui, apiKey, mode = 'voice', wantMic = true, micDevice }) {
+export async function startCore({ herdr, ui, apiKey, mode = 'voice', wantMic = true, micDevice, remoteHost }) {
   const transcript = new TranscriptStore()
   const player = new AudioPlayer().start()
   player.on('error', (e) => ui.addSystem(`audio out failed: ${e.message}`))
@@ -52,6 +52,10 @@ export async function startCore({ herdr, ui, apiKey, mode = 'voice', wantMic = t
   const stateTimer = setInterval(refreshState, 4000)
 
   const execute = createExecutor(herdr, {
+    // With --tunnel-host, herdr and all its workspaces live on the remote
+    // machine; the executor needs to know so it never points a local exec at
+    // a remote workspace path.
+    remoteHost,
     onNotice: (m) => {
       ui.addSystem(m)
       transcript.system(m)
