@@ -274,7 +274,7 @@ export const TOOL_SPECS = [
   {
     name: 'prompt_agent',
     description:
-      'Send a prompt/instruction to a running agent, wait for its turn to finish (up to ~25s), and return its reply.',
+      "Send a prompt/instruction to a running agent and wait for its turn (up to ~25s). turn is 'completed' (reply ready), 'still_running' (deadline hit while working — partial screen in reply, check back with read_agent), or 'no activity detected'.",
     parameters: {
       type: 'object',
       properties: {
@@ -448,8 +448,10 @@ function summarize({ snapshot, agents }) {
  * Execute one voice tool against herdr.
  * Returns a plain object which is JSON-stringified back to the model.
  */
-export function createExecutor(herdr, { onNotice } = {}) {
+export function createExecutor(herdr, { onNotice, promptTimeoutMs, shellTimeoutMs, remoteHost } = {}) {
   const notice = (m) => onNotice?.(m)
+  const PROMPT_DEADLINE_MS = promptTimeoutMs ?? 25_000
+  const SHELL_TIMEOUT_MS = shellTimeoutMs ?? 60_000
 
   return async function execute(name, args = {}) {
     const state = await readState(herdr)
@@ -608,10 +610,16 @@ export function createExecutor(herdr, { onNotice } = {}) {
         // Capture the agent's turn in THIS tool result: wait until the agent
         // leaves idle (starts working) and comes back, so the model can speak
         // the reply instead of blindly claiming it was sent.
+        //
+        // Observed completion is tracked separately from the deadline: if the
+        // deadline expires while the agent is still working, say so — claiming
+        // turn="completed" here gets relayed to the user as a finished answer
+        // that does not exist.
         const t0 = Date.now()
         let sawWorking = false
+        let completed = false
         let reply = ''
-        while (Date.now() - t0 < 25_000) {
+        while (Date.now() - t0 < PROMPT_DEADLINE_MS) {
           await sleep(700)
           const [status, screen] = await Promise.all([
             readState(herdr)
@@ -621,13 +629,37 @@ export function createExecutor(herdr, { onNotice } = {}) {
           ])
           if (status && status !== 'idle') sawWorking = true
           reply = screen
-          if (sawWorking && status === 'idle') break
+          if (sawWorking && status === 'idle') {
+            completed = true
+            break
+          }
           if (!sawWorking && Date.now() - t0 > 8000 && reply && reply !== before) break
+        }
+        if (completed) {
+          return {
+            ok: true,
+            agent: a.name,
+            turn: 'completed',
+            reply: tailText(reply),
+          }
+        }
+        if (sawWorking) {
+          notice(`${a.name} is still working after the wait deadline`)
+          return {
+            ok: true,
+            agent: a.name,
+            turn: 'still_running',
+            timed_out: true,
+            waited_ms: PROMPT_DEADLINE_MS,
+            // Whatever is on screen so far — the model must not present it as
+            // a final answer.
+            reply: tailText(reply),
+          }
         }
         return {
           ok: true,
           agent: a.name,
-          turn: sawWorking ? 'completed' : 'no activity detected',
+          turn: 'no activity detected',
           reply: tailText(reply),
         }
       }
@@ -809,6 +841,6 @@ Rules:
 - Vocabulary: "space" = workspace, "pane" = a terminal split, "agent" = a coding agent like claude or codex.
 - When the user asks what is running or what an agent is doing, use get_state and read_agent, then summarize in one or two sentences.
 - run_shell executes directly on this machine and returns real stdout/stderr/exit code. Read it and use the actual numbers/text in your answer — never say you cannot see command output. For destructive or irreversible shell commands (rm -rf, git push, force resets), confirm with the user out loud first.
-- prompt_agent returns the agent's reply once its turn finishes. Use read_agent afterwards for a live view.
+- prompt_agent returns the agent's reply once its turn finishes. If turn is "still_running", the agent is mid-work: never present reply as final, say it is still running, and use read_agent to check on it later.
 - When the user asks a question or requests content (explanations, poems, summaries), answer it fully using real tool output — terseness is for confirming actions, not for answers.
 - Never invent space names, agent names, or statuses. Read them with get_state first.`

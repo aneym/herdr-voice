@@ -86,6 +86,32 @@ const check = (name, ok, detail) => {
   check('an agent that never worked is reported honestly', res.turn !== 'completed', res.turn)
 }
 
+// ---- a deadline hit mid-work must not be reported as a completed turn ----
+{
+  // The agent starts working and never comes back to idle. The tool's wait
+  // deadline expires while it is still going: returning turn="completed" here
+  // is a lie the model will relay to the user as a finished answer.
+  let polls = 0
+  const herdr = fakeHerdr({
+    agents: [{ name: 'worker', pane_id: 'p1', status: 'idle' }],
+    screens: { p1: () => (polls > 1 ? 'still editing src/foo.js, halfway through the refactor' : 'waiting') },
+  })
+  const realRequest = herdr.request.bind(herdr)
+  herdr.request = async (method, params) => {
+    if (method === 'agent.list') {
+      polls++
+      herdr.state.agents[0].status = 'working' // and stays working past the deadline
+    }
+    return realRequest(method, params)
+  }
+  const run = createExecutor(herdr, { onNotice: () => {}, promptTimeoutMs: 1200 })
+  const res = await run('prompt_agent', { agent: 'worker', text: 'do the big refactor' })
+  check('an agent still working at the deadline is not reported completed', res.turn !== 'completed', res.turn)
+  check('the deadline hit says so explicitly', res.turn === 'still_running' && res.timed_out === true, JSON.stringify({ turn: res.turn, timed_out: res.timed_out }))
+  check('partial output comes back with the timeout', String(res.reply).includes('halfway through the refactor'), JSON.stringify(res.reply))
+  check('the prompt itself was still delivered', herdr.sent('agent.prompt')[0]?.text === 'do the big refactor')
+}
+
 // ---- agents are addressed by pane id, not by the name we made up ----
 {
   // herdr 0.8 stopped returning a `name` field. The name shown to the user is
