@@ -109,6 +109,7 @@ async function main() {
     mode: 'voice',
     wantMic: opts.mic,
     micDevice: opts.device,
+    remoteHost: opts.tunnelHost,
   })
 
   // control socket

@@ -8,6 +8,9 @@
  */
 import { createExecutor } from '../../src/tools.js'
 import { fakeHerdr } from '../support/fake-herdr.mjs'
+import os from 'node:os'
+import fs from 'node:fs'
+import path from 'node:path'
 
 const results = []
 const check = (name, ok, detail) => {
@@ -110,6 +113,39 @@ const check = (name, ok, detail) => {
   check('the deadline hit says so explicitly', res.turn === 'still_running' && res.timed_out === true, JSON.stringify({ turn: res.turn, timed_out: res.timed_out }))
   check('partial output comes back with the timeout', String(res.reply).includes('halfway through the refactor'), JSON.stringify(res.reply))
   check('the prompt itself was still delivered', herdr.sent('agent.prompt')[0]?.text === 'do the big refactor')
+}
+
+// ---- run_shell executes on the voice host, and must say so ----
+{
+  // A remote/tunnel session: the snapshot's foreground_cwd is a path on the
+  // herdr host, not on the machine running the voice engine. Pointing a local
+  // exec at it runs against the wrong checkout — or fails confusingly.
+  const probe = path.join(os.tmpdir(), `herdr-voice-remote-probe-${process.pid}`)
+  fs.rmSync(probe, { force: true })
+  const herdr = fakeHerdr({
+    panes: [{ pane_id: 'p1', workspace_id: 'w1', foreground_cwd: '/home/dev/repos/app' }],
+  })
+  const run = createExecutor(herdr, { onNotice: () => {}, remoteHost: 'build.lan' })
+  const res = await run('run_shell', { command: `touch ${probe}` })
+  check('a remote session is not executed on the local voice host', res.ok === false && !fs.existsSync(probe), JSON.stringify(res))
+  check('the rejection names the remote host', String(res.error).includes('build.lan'), res.error)
+  check('the rejection points at run_in_pane as the way to run it there', String(res.error).includes('run_in_pane'), res.error)
+  fs.rmSync(probe, { force: true })
+}
+{
+  // No remoteHost flag, but the focused pane's cwd is not a path on this
+  // machine (e.g. connected to a remote herdr via an explicit socket). A local
+  // exec there would throw ENOENT or silently run in a fallback directory.
+  const cwd = path.join(os.tmpdir(), `herdr-voice-not-on-this-host-${process.pid}`)
+  fs.rmSync(cwd, { force: true })
+  const herdr = fakeHerdr({
+    panes: [{ pane_id: 'p1', workspace_id: 'w1', foreground_cwd: cwd }],
+  })
+  const run = createExecutor(herdr, { onNotice: () => {} })
+  const res = await run('run_shell', { command: 'pwd' })
+  check('a workspace path that is not on this machine is refused, not executed elsewhere', res.ok === false && !('stdout' in res) && !('exit_code' in res), JSON.stringify(res))
+  check('the refusal says the directory is missing on the voice host', String(res.error).includes(cwd), res.error)
+  check('the refusal still suggests run_in_pane', String(res.error).includes('run_in_pane'), res.error)
 }
 
 // ---- agents are addressed by pane id, not by the name we made up ----

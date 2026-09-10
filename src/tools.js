@@ -316,7 +316,7 @@ export const TOOL_SPECS = [
   {
     name: 'run_shell',
     description:
-      'Run a shell command directly on this machine and wait for it to finish. Returns stdout, stderr, and exit code — always use the real output in your answer. Use for build/test/git, reading files, checking status.',
+      'Run a shell command directly on the voice host (the machine running this voice session) and wait for it to finish. Returns stdout, stderr, and exit code — always use the real output in your answer. Use for build/test/git, reading files, checking status. Refused when the herdr session (and its workspaces) is on a remote host — use run_in_pane there instead.',
     parameters: {
       type: 'object',
       properties: {
@@ -700,14 +700,44 @@ export function createExecutor(herdr, { onNotice, promptTimeoutMs, shellTimeoutM
         // output (and if the resolved pane hosted an agent, the "command"
         // was delivered to the agent as a chat prompt). Direct execution
         // makes the result self-contained: real stdout/stderr/exit code.
+        //
+        // The execution host is the voice host, and that must be explicit.
+        // In a remote/tunnel session the herdr workspaces live on another
+        // machine: pointing a local exec at the snapshot's foreground_cwd
+        // would run against the wrong checkout. There it is refused, and
+        // run_in_pane is the way to run a command inside the workspace.
+        if (remoteHost) {
+          return {
+            ok: false,
+            error:
+              `run_shell executes on the voice host, but this herdr session runs on "${remoteHost}" — ` +
+              'its workspaces are not on this machine. Use run_in_pane to run the command inside the workspace pane instead.',
+            ran: args.command,
+            remote_host: remoteHost,
+          }
+        }
         const t0 = Date.now()
         const cwd =
           snapshot.panes?.find((p) => p.pane_id === snapshot.focused_pane_id)?.foreground_cwd ??
           process.env.HOME
+        // A snapshot cwd that does not exist locally means the workspace is
+        // not on this machine (remote herdr via an explicit socket, or a path
+        // since deleted). Executing anyway would throw ENOENT at best and run
+        // somewhere unintended at worst — refuse with the useful explanation.
+        if (!fs.existsSync(cwd)) {
+          return {
+            ok: false,
+            error:
+              `The workspace directory "${cwd}" does not exist on the voice host — it likely belongs to a remote herdr session. ` +
+              'Use run_in_pane to run the command inside the workspace pane instead.',
+            ran: args.command,
+            cwd,
+          }
+        }
         try {
           const { stdout, stderr } = await execP(String(args.command), {
             cwd,
-            timeout: 60_000,
+            timeout: SHELL_TIMEOUT_MS,
             maxBuffer: 4 * 1024 * 1024,
             encoding: 'utf8',
           })
