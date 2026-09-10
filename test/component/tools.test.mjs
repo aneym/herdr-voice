@@ -48,6 +48,18 @@ const check = (name, ok, detail) => {
   check('a failing command reports its non-zero exit code', res.exit_code === 3, `exit_code=${res.exit_code}`)
   check('a failing command is not reported as ok', res.ok === false, `ok=${res.ok}`)
   check('stderr is returned, not discarded', String(res.stderr).includes('to-stderr'), JSON.stringify(res.stderr))
+  // The core UI reads result.error on failures; without it a nonzero exit
+  // shows as success in the HUD and stays pending in the TUI.
+  check('a failing command carries an error message for the UI', typeof res.error === 'string' && res.error.includes('3'), JSON.stringify(res.error))
+}
+{
+  // Spawn errors and timeouts must surface an error too, not just nonzero
+  // exits.
+  const herdr = fakeHerdr()
+  const run = createExecutor(herdr, { onNotice: () => {}, shellTimeoutMs: 500 })
+  const res = await run('run_shell', { command: 'sleep 5' })
+  check('a timed-out command is a failure with an error message', res.ok === false && typeof res.error === 'string' && res.error.length > 0, JSON.stringify(res))
+  check('a timed-out command says it timed out', res.timed_out === true && /timed out/.test(res.error), JSON.stringify(res.error))
 }
 
 // ---- prompt_agent: waits for the turn, returns the reply ----

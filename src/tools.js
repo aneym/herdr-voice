@@ -759,11 +759,22 @@ export function createExecutor(herdr, { onNotice, promptTimeoutMs, shellTimeoutM
           // build as ok:true because the tool itself worked is how the model
           // ends up telling the user the tests passed: it reads the flag before
           // it reads the exit code.
-          notice(`ran ${args.command} (exit ${e.code ?? 'timeout'})`)
+          //
+          // The core UI reads result.error on ok:false — without an error
+          // string here, a nonzero exit shows as success in the HUD and stays
+          // pending in the TUI. Every failure path carries one: nonzero exit,
+          // timeout, and spawn errors (missing cwd, missing shell).
+          const errorMessage = e.killed
+            ? `timed out after ${SHELL_TIMEOUT_MS}ms${e.signal ? ` (${e.signal})` : ''}`
+            : typeof e.code === 'number' && e.code > 0
+              ? `exited with code ${e.code}`
+              : String(e.message ?? 'command failed to start').split('\n')[0]
+          notice(`ran ${args.command} (${e.killed ? 'timeout' : `exit ${e.code ?? '?'}`})`)
           return {
             ok: false,
+            error: errorMessage,
             ran: args.command,
-            exit_code: typeof e.code === 'number' ? e.code : undefined,
+            exit_code: typeof e.code === 'number' && e.code > 0 ? e.code : undefined,
             timed_out: !!e.killed,
             cwd,
             stdout: tailText(e.stdout, 4000),
