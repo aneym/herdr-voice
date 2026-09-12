@@ -7,21 +7,7 @@ import { HerdrClient } from './herdr.js'
 import { VoiceTUI } from './tui.js'
 import { VoiceHUD } from './hud.js'
 import { startCore } from './core.js'
-
-function parseArgs(argv) {
-  const out = { session: undefined, socket: undefined, mode: 'voice', mic: true, hud: false }
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--session') out.session = argv[++i]
-    else if (a === '--socket') out.socket = argv[++i]
-    else if (a === '--text') out.mode = 'text'
-    else if (a === '--no-mic') out.mic = false
-    else if (a === '--hud') out.hud = true
-    else if (a === '--full') out.hud = false
-    else if (a === '--device') out.device = argv[++i]
-  }
-  return out
-}
+import { parseArgs, coreOptions } from './args.js'
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
@@ -41,14 +27,11 @@ async function main() {
     : new VoiceTUI({ sessionName, model: MODEL })
   ui.start()
 
-  const core = await startCore({
-    herdr,
-    ui,
-    apiKey,
-    mode: opts.mode,
-    wantMic: opts.mic,
-    micDevice: opts.device,
-  })
+  // --remote-host carries the one fact this process cannot work out for
+  // itself: bin/herdr-voice-run builds the SSH tunnel and then starts us with
+  // its local end, so the socket looks local and the workspace paths behind it
+  // are not. Without it, run_shell would execute a remote path here.
+  const core = await startCore({ herdr, ui, apiKey, ...coreOptions(opts) })
 
   ui.on('toggle-mic', core.toggleMic)
   ui.on('toggle-mute', core.toggleMic) // full-TUI event name

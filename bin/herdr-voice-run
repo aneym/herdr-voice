@@ -55,5 +55,9 @@ fi
 
 sock_alive || fail_hold "herdr not reachable on $HOST"
 
-node "$APP_DIR/src/index.js" --socket "$SOCK" "$@" \
+# $SOCK is the near end of the tunnel, so it looks like a local herdr and the
+# workspace paths behind it are not local at all. --remote-host says so, and
+# run_shell refuses to execute them here instead of against a same-named
+# directory on this machine.
+node "$APP_DIR/src/index.js" --socket "$SOCK" --remote-host "$HOST" "$@" \
   || fail_hold "app exited (rc=$?) — see above"

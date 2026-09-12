@@ -18,22 +18,10 @@ import path from 'node:path'
 import { loadApiKey, resolveSocket } from './config.js'
 import { HerdrClient } from './herdr.js'
 import { startCore } from './core.js'
+import { parseArgs, coreOptions } from './args.js'
 
 const CTL_DIR = path.join(os.homedir(), '.cache/herdr-voice')
 const CTL_SOCK = process.env.HERDR_VOICE_CTL || path.join(CTL_DIR, 'ctl.sock')
-
-function parseArgs(argv) {
-  const out = { session: undefined, socket: undefined, mic: true, tunnelHost: undefined }
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--session') out.session = argv[++i]
-    else if (a === '--socket') out.socket = argv[++i]
-    else if (a === '--tunnel-host') out.tunnelHost = argv[++i]
-    else if (a === '--no-mic') out.mic = false
-    else if (a === '--device') out.device = argv[++i]
-  }
-  return out
-}
 
 /** Implements the HUD surface; broadcasts each call and keeps a replayable snapshot. */
 class Broadcaster {
@@ -102,14 +90,7 @@ async function main() {
     { get: (_, m) => (typeof m === 'string' ? (...a) => bc.emitCall(m, ...a) : undefined) }
   )
 
-  const core = await startCore({
-    herdr,
-    ui,
-    apiKey,
-    mode: 'voice',
-    wantMic: opts.mic,
-    micDevice: opts.device,
-  })
+  const core = await startCore({ herdr, ui, apiKey, ...coreOptions(opts), mode: 'voice' })
 
   // control socket
   fs.mkdirSync(CTL_DIR, { recursive: true })
