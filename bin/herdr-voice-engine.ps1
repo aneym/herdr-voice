@@ -24,5 +24,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'engine.log'
 "[$(Get-Date -Format s)] engine starting (host=$hostAlias owner=$owner)" | Out-File $log -Append
 
-& node "$root\src\engine.js" --tunnel-host $hostAlias --owner $owner *>> $log
+# cmd does the redirection: PowerShell's *>> wraps every stderr line of a
+# native command in a NativeCommandError record, burying the real log.
+& cmd /c "node ""$root\src\engine.js"" --tunnel-host $hostAlias --owner $owner >> ""$log"" 2>&1"
 "[$(Get-Date -Format s)] engine exited rc=$LASTEXITCODE" | Out-File $log -Append
