@@ -113,10 +113,10 @@ export async function startCore({ herdr, ui, apiKey, mode = 'voice', wantMic = t
       ui.addSystem(
         devices.length
           ? `only virtual audio devices found (${devices.map((d) => d.name).join(', ')}) — no real microphone. Text input works.`
-          : 'no microphone available — grant mic permission (System Settings > Privacy & Security > Microphone). Text input still works.'
+          : 'no microphone available — grant mic permission (macOS: System Settings > Privacy & Security > Microphone; Windows: Settings > Privacy > Microphone). Text input still works.'
       )
     } else {
-      const device = micDevice ?? `:${picked.index}`
+      const device = micDevice ?? MicCapture.deviceSpec(picked)
       mic = new MicCapture({ device }).start()
       ui.setMic({ available: true, muted: true })
       ui.addSystem(`mic: ${micDevice ?? picked.name} — unmute to talk`)

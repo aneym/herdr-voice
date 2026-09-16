@@ -18,12 +18,15 @@ import path from 'node:path'
 import { loadApiKey, resolveSocket } from './config.js'
 import { HerdrClient } from './herdr.js'
 import { startCore } from './core.js'
+import { IS_WIN, isTcp, netOptions } from './endpoint.js'
 
 const CTL_DIR = path.join(os.homedir(), '.cache/herdr-voice')
-const CTL_SOCK = process.env.HERDR_VOICE_CTL || path.join(CTL_DIR, 'ctl.sock')
+// Windows has no unix sockets for ssh's local forward end: listen on loopback TCP.
+const CTL_SOCK =
+  process.env.HERDR_VOICE_CTL || (IS_WIN ? 'tcp:127.0.0.1:47821' : path.join(CTL_DIR, 'ctl.sock'))
 
 function parseArgs(argv) {
-  const out = { session: undefined, socket: undefined, mic: true, tunnelHost: undefined }
+  const out = { session: undefined, socket: undefined, mic: true, tunnelHost: undefined, owner: undefined }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--session') out.session = argv[++i]
@@ -31,6 +34,7 @@ function parseArgs(argv) {
     else if (a === '--tunnel-host') out.tunnelHost = argv[++i]
     else if (a === '--no-mic') out.mic = false
     else if (a === '--device') out.device = argv[++i]
+    else if (a === '--owner') out.owner = argv[++i]
   }
   return out
 }
@@ -51,7 +55,7 @@ class Broadcaster {
   }
   emitCall(m, ...a) {
     const msg = { m, a }
-    const STICKY = new Set(['setStatus', 'setMic', 'setSound', 'setSpeaking', 'setPartial', 'setHerdrState'])
+    const STICKY = new Set(['engineInfo', 'setStatus', 'setMic', 'setSound', 'setSpeaking', 'setPartial', 'setHerdrState'])
     if (STICKY.has(m)) this.state[m] = msg
     else {
       this.feed.push(msg)
@@ -97,6 +101,15 @@ async function main() {
   await herdr.connect()
 
   const bc = new Broadcaster()
+  // First sticky event = first line a connecting client sees: lets the summon
+  // script tell WHICH machine's engine owns the ctl socket (placement check).
+  bc.emitCall('engineInfo', {
+    owner: opts.owner || os.hostname().split('.')[0],
+    host: os.hostname(),
+    platform: process.platform,
+    pid: process.pid,
+    session: sessionName,
+  })
   const ui = new Proxy(
     {},
     { get: (_, m) => (typeof m === 'string' ? (...a) => bc.emitCall(m, ...a) : undefined) }
@@ -113,7 +126,7 @@ async function main() {
 
   // control socket
   fs.mkdirSync(CTL_DIR, { recursive: true })
-  fs.rmSync(CTL_SOCK, { force: true })
+  if (!isTcp(CTL_SOCK)) fs.rmSync(CTL_SOCK, { force: true })
   const server = net.createServer((client) => {
     client.setEncoding('utf8')
     let buf = ''
@@ -146,7 +159,7 @@ async function main() {
     client.on('close', drop)
     client.on('error', drop)
   })
-  server.listen(CTL_SOCK)
+  server.listen(netOptions(CTL_SOCK))
   console.log(`engine up: session=${sessionName} ctl=${CTL_SOCK} pid=${process.pid}`)
 
   function handleCommand(cmd) {
@@ -172,7 +185,7 @@ async function main() {
     herdr.close()
     tunnels?.stop()
     server.close()
-    fs.rmSync(CTL_SOCK, { force: true })
+    if (!isTcp(CTL_SOCK)) fs.rmSync(CTL_SOCK, { force: true })
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

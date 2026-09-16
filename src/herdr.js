@@ -1,5 +1,6 @@
 import net from 'node:net'
 import { EventEmitter } from 'node:events'
+import { netOptions } from './endpoint.js'
 
 /**
  * Client for the herdr unix-socket JSON API.
@@ -27,7 +28,7 @@ export class HerdrClient extends EventEmitter {
   request(method, params = {}, { timeoutMs = 15000 } = {}) {
     const id = `hv:${++this.seq}`
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection(this.socketPath)
+      const socket = net.createConnection(netOptions(this.socketPath))
       socket.setEncoding('utf8')
       let buffer = ''
       let settled = false
@@ -87,7 +88,7 @@ export class HerdrClient extends EventEmitter {
     const subscriptions = types.map((t) => ({ type: t }))
     const dial = () => {
       if (this.closed) return
-      const socket = net.createConnection(this.socketPath)
+      const socket = net.createConnection(netOptions(this.socketPath))
       this.eventSocket = socket
       socket.setEncoding('utf8')
       let buffer = ''

@@ -2,6 +2,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { IS_WIN, isTcp, netOptions, sshLocalEnd } from './endpoint.js'
 
 const RUN_DIR = path.join(os.homedir(), '.cache/herdr-voice')
 
@@ -13,19 +14,32 @@ const RUN_DIR = path.join(os.homedir(), '.cache/herdr-voice')
  * engine restart silently orphaned the HUD (tunnels dead, engine "up").
  * As children of the engine they live and die with it, and get respawned
  * with backoff if they drop.
+ *
+ * Local ends are unix sockets on macOS and loopback TCP on Windows (OpenSSH for
+ * Windows forwards TCP<->remote unix socket fine; it just can't bind a local
+ * unix socket). Remote ends are always the server's unix sockets.
  */
 export function startTunnels({ host, ctlSock, log = () => {} }) {
   fs.mkdirSync(RUN_DIR, { recursive: true })
-  const herdrSock = path.join(RUN_DIR, `${host}.sock`)
+  const herdrSock = IS_WIN
+    ? process.env.HERDR_VOICE_HERDR_LOCAL || 'tcp:127.0.0.1:47822'
+    : path.join(RUN_DIR, `${host}.sock`)
 
-  // ssh -L/-R need ABSOLUTE remote paths — resolve the remote HOME once.
-  const remoteHome = execFileSync(
+  // ssh -L/-R need ABSOLUTE remote paths — resolve the remote HOME once, and
+  // honour a target-socket file the summon script writes so the engine drives
+  // the herdr session that actually invoked it (named profiles), not always
+  // the default session.
+  const [remoteHome, remoteTarget] = execFileSync(
     'ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, 'printf %s "$HOME"'],
+    [
+      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host,
+      'printf %s "$HOME"; printf "\\n"; cat "$HOME/.cache/herdr-voice/target-socket" 2>/dev/null',
+    ],
     { encoding: 'utf8' }
-  ).trim()
-  const remoteHerdr = `${remoteHome}/.config/herdr/herdr.sock`
+  ).split('\n')
+  const remoteHerdr = (remoteTarget || '').trim() || `${remoteHome}/.config/herdr/herdr.sock`
   const remoteCtl = `${remoteHome}/.cache/herdr-voice/ctl.sock`
+  log(`tunnels: herdr ${remoteHerdr} <- ${herdrSock}; ctl ${remoteCtl} -> ${ctlSock}`)
 
   const children = new Set()
   let stopped = false
@@ -73,10 +87,12 @@ export function startTunnels({ host, ctlSock, log = () => {} }) {
     '-o', 'ControlPath=none',
   ]
 
-  keep('herdr(-L)', () => ['-L', `${herdrSock}:${remoteHerdr}`, ...common, host], {
-    preflight: () => fs.rmSync(herdrSock, { force: true }),
+  keep('herdr(-L)', () => ['-L', `${sshLocalEnd(herdrSock)}:${remoteHerdr}`, ...common, host], {
+    preflight: () => {
+      if (!isTcp(herdrSock)) fs.rmSync(herdrSock, { force: true })
+    },
   })
-  keep('ctl(-R)', () => ['-R', `${remoteCtl}:${ctlSock}`, ...common, host], {
+  keep('ctl(-R)', () => ['-R', `${remoteCtl}:${sshLocalEnd(ctlSock)}`, ...common, host], {
     // sshd refuses to bind over a stale remote socket (StreamLocalBindUnlink
     // defaults to no) — remove it right before every dial.
     preflight: () =>
@@ -90,7 +106,7 @@ export function startTunnels({ host, ctlSock, log = () => {} }) {
       const t0 = Date.now()
       while (Date.now() - t0 < timeoutMs) {
         const ok = await new Promise((resolve) => {
-          const s = net.createConnection(herdrSock)
+          const s = net.createConnection(netOptions(herdrSock))
           s.setEncoding('utf8')
           let done = false
           const fin = (v) => {

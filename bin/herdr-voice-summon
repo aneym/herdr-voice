@@ -1,77 +1,183 @@
 #!/bin/zsh
 # Runs ON THE HERDR SERVER host, bound to prefix+m.
 #
-# Engine placement (where the mic/speakers live), in order:
-#   1. engine already running (local ctl.sock answers a handshake) -> reuse
-#   2. this machine has a real microphone -> local engine (you're AT the server)
-#   3. HANDS_HOST reachable -> remote engine there (LaunchAgent, GUI session)
-#   4. neither -> local engine anyway (text + tools still work)
+# The engine (mic/speakers/Realtime/tools) must run where the human sits, so
+# placement is decided per summon:
+#   1. `--hands <label|auto>` pins/unpins a hands machine (~/.cache/herdr-voice/hands-pin)
+#   2. otherwise: which attached herdr client was opened most recently? Remote
+#      clients are matched by their SSH_CLIENT ip against
+#      ~/.config/herdr-voice/hands.conf (label|ip|ssh_host|kind); a client with
+#      no ssh origin means the human is at this machine -> local engine.
+# If an engine is already up but owned by a different machine it is stopped
+# first (one engine at a time; they share the studio-side ctl.sock).
 # Then open the HUD: floating top-right when the server supports it (fork
 # feature 7), else the popup fallback.
 #
-# --stop = fully stop the engine. (Esc just dismisses the HUD; the engine
-# idles muted for instant reopen.)
+# --stop   = fully stop the engine. (Esc just dismisses the HUD; the engine
+#            idles muted for instant reopen.)
+# --no-hud = start/verify the engine only (tests).
 set -uo pipefail
 
-HANDS_HOST="${HERDR_VOICE_HANDS_HOST:-macbook-ts}"
-HANDS_DIR="${HERDR_VOICE_HANDS_DIR:-repos/personal/herdr-voice}"
-AGENT_LABEL="${HERDR_VOICE_AGENT_LABEL:-com.aneyman.herdr-voice-engine}"
+HANDS_CONF="${HERDR_VOICE_HANDS_CONF:-$HOME/.config/herdr-voice/hands.conf}"
+RUN="$HOME/.cache/herdr-voice"
+CTL="$RUN/ctl.sock"
+PIN="$RUN/hands-pin"
 APP_DIR="${0:A:h:h}"
-CTL="$HOME/.cache/herdr-voice/ctl.sock"
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$PATH"
+mkdir -p "$RUN"
 
 hnote() {
   [[ -n "${HERDR_SOCKET_PATH:-}" ]] || return 0
   printf '{"id":"hv","method":"notification.show","params":{"title":"%s","body":"%s"}}\n' "$1" "${2:-}" \
     | nc -U "$HERDR_SOCKET_PATH" -w 2 >/dev/null 2>&1
 }
+log() { print -r -- "[$(date +%H:%M:%S)] $*" >> "$RUN/summon.log" }
 
 # Handshake, not just connect: a dead tunnel's socket still ACCEPTS — only a
-# live engine sends its state replay within the first second.
-ctl_alive() {
+# live engine sends its state replay (first line = engineInfo) within a second.
+ctl_first_line() {
   [[ -S "$CTL" ]] || return 1
   local out
-  out=$(printf '\n' | nc -U "$CTL" -w 1 2>/dev/null | head -c 20)
-  [[ -n "$out" ]]
+  out=$(nc -U "$CTL" -w 1 </dev/null 2>/dev/null | head -1)
+  [[ -n "$out" ]] || return 1
+  print -r -- "$out"
+}
+ctl_alive() { ctl_first_line >/dev/null }
+ctl_owner() {
+  local line
+  line=$(ctl_first_line) || return 1
+  print -r -- "$line" | sed -n 's/.*"owner":"\([^"]*\)".*/\1/p'
 }
 
-if [[ "${1:-}" == "--stop" ]]; then
-  ctl_alive && printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
-  pkill -f "herdr-voice.*src/engine.js" 2>/dev/null || true
-  hnote "voice: engine stopped"
-  exit 0
+# ---- hands registry -------------------------------------------------------
+# label|ip|ssh_host|kind   kind = launchd:<label> | schtask:<TaskName>
+typeset -A H_IP H_SSH H_KIND
+if [[ -r "$HANDS_CONF" ]]; then
+  while IFS='|' read -r label ip sshhost kind; do
+    [[ -z "$label" || "$label" == \#* ]] && continue
+    H_IP[$label]="$ip"; H_SSH[$label]="$sshhost"; H_KIND[$label]="$kind"
+  done < "$HANDS_CONF"
 fi
+label_for_ip() {
+  local l
+  for l in "${(@k)H_IP}"; do
+    [[ "${H_IP[$l]}" == "$1" ]] && { print -r -- "$l"; return 0 }
+  done
+  return 1
+}
 
+# Most recently started attached herdr client wins. Output: label or "local".
+detect_hands() {
+  local best_ts=0 best="local" pid ts ip lbl lstart
+  for pid in $(pgrep -x herdr 2>/dev/null); do
+    # skip the server itself and CLI one-shots: clients have no args
+    [[ "$(ps -o command= -p "$pid" 2>/dev/null)" == *"/herdr" ]] || continue
+    lstart=$(ps -o lstart= -p "$pid" 2>/dev/null) || continue
+    ts=$(date -j -f '%a %b %d %T %Y' "$lstart" +%s 2>/dev/null) || continue
+    ip=$(ps -E -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | sed -n 's/^SSH_CLIENT=//p' | head -1)
+    if [[ -n "$ip" ]]; then
+      lbl=$(label_for_ip "$ip") || continue   # unknown remote origin: ignore
+    else
+      lbl="local"
+    fi
+    (( ts > best_ts )) && { best_ts=$ts; best="$lbl" }
+  done
+  print -r -- "$best"
+}
+
+# ---- engine lifecycle -----------------------------------------------------
 has_real_mic() {
   ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
     | sed -n '/audio devices/,$p' | grep -qiE '\[[0-9]+\] .*(microphone|airpods|usb|external|built-in)'
 }
+uid_of() { ssh -o BatchMode=yes -o ConnectTimeout=6 "$1" 'id -u' 2>/dev/null }
 
-start_local_engine() {
-  rm -f "$CTL"
-  ( nohup node "$APP_DIR/src/engine.js" > "$HOME/.cache/herdr-voice/engine-local.log" 2>&1 & ) </dev/null
+start_engine() {   # $1 = label
+  local lbl="$1" kind sshhost name
+  if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
+    print -r -- "$HERDR_SOCKET_PATH" > "$RUN/target-socket"
+  else
+    rm -f "$RUN/target-socket"
+  fi
+  [[ -S "$CTL" ]] && rm -f "$CTL"
+  if [[ "$lbl" == "local" ]]; then
+    local mic=()
+    has_real_mic || mic=(--no-mic)
+    ( nohup node "$APP_DIR/src/engine.js" --owner "$(hostname -s)" "${mic[@]}" > "$RUN/engine-local.log" 2>&1 & ) </dev/null
+    return 0
+  fi
+  kind="${H_KIND[$lbl]:-}"; sshhost="${H_SSH[$lbl]:-}"; name="${kind#*:}"
+  case "$kind" in
+    launchd:*)
+      ssh -o BatchMode=yes -o ConnectTimeout=6 "$sshhost" \
+        "u=\$(id -u); launchctl enable gui/\$u/$name 2>/dev/null; launchctl bootstrap gui/\$u ~/Library/LaunchAgents/$name.plist 2>/dev/null; launchctl kickstart -k gui/\$u/$name" >/dev/null 2>&1 ;;
+    schtask:*)
+      ssh -o BatchMode=yes -o ConnectTimeout=6 "$sshhost" \
+        "schtasks /end /tn $name >NUL 2>&1 & schtasks /run /tn $name" >/dev/null 2>&1 ;;
+    *) log "unknown hands kind for $lbl: $kind"; return 1 ;;
+  esac
 }
 
-if ! ctl_alive; then
-  rm -f "$CTL"
-  if has_real_mic; then
-    start_local_engine
-  elif ssh -o BatchMode=yes -o ConnectTimeout=4 "$HANDS_HOST" \
-    "launchctl kickstart -k gui/\$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then
-    : # remote engine starting; its reverse tunnel will populate $CTL
-  else
-    hnote "voice: $HANDS_HOST unreachable" "running engine here (no mic — text only)"
-    start_local_engine
+stop_engine() {   # $1 = label (or empty = whatever is up)
+  local lbl="${1:-}" kind sshhost name
+  ctl_alive && printf '{"cmd":"stop"}\n' | nc -U "$CTL" -w 2 >/dev/null 2>&1
+  pkill -f "herdr-voice.*src/engine.js" 2>/dev/null || true
+  if [[ -n "$lbl" && "$lbl" != "local" ]]; then
+    kind="${H_KIND[$lbl]:-}"; sshhost="${H_SSH[$lbl]:-}"; name="${kind#*:}"
+    case "$kind" in
+      launchd:*) ssh -o BatchMode=yes -o ConnectTimeout=6 "$sshhost" "launchctl kill TERM gui/\$(id -u)/$name" >/dev/null 2>&1 ;;
+      schtask:*) ssh -o BatchMode=yes -o ConnectTimeout=6 "$sshhost" "schtasks /end /tn $name" >/dev/null 2>&1 ;;
+    esac
   fi
-  for _ in {1..24}; do
+  for _ in {1..12}; do ctl_alive || break; sleep 0.5; done
+  rm -f "$CTL"
+}
+
+# ---- args -----------------------------------------------------------------
+NO_HUD=0
+while (( $# )); do
+  case "$1" in
+    --stop) stop_engine "$(ctl_owner 2>/dev/null)"; hnote "voice: engine stopped"; exit 0 ;;
+    --hands)
+      shift
+      if [[ "${1:-auto}" == "auto" ]]; then rm -f "$PIN"; else print -r -- "$1" > "$PIN"; fi ;;
+    --no-hud) NO_HUD=1 ;;
+  esac
+  shift
+done
+
+WANT=$( [[ -r "$PIN" ]] && cat "$PIN" || detect_hands )
+[[ "$WANT" == "local" || -n "${H_KIND[$WANT]:-}" ]] || { log "unknown hands '$WANT', using local"; WANT=local }
+log "want=$WANT pin=$([[ -r $PIN ]] && cat $PIN || echo -)"
+
+OWNER=$(ctl_owner 2>/dev/null || true)
+if [[ -n "$OWNER" && "$OWNER" != "$WANT" ]]; then
+  log "engine owned by $OWNER, switching to $WANT"
+  hnote "voice: moving engine $OWNER -> $WANT"
+  stop_engine "$OWNER"
+  OWNER=""
+fi
+
+if [[ -z "$OWNER" ]]; then
+  if ! start_engine "$WANT"; then
+    if [[ "$WANT" != "local" ]]; then
+      hnote "voice: $WANT unreachable" "running engine here (text only)"
+      WANT=local; start_engine local
+    fi
+  fi
+  for _ in {1..50}; do
     ctl_alive && break
     sleep 0.5
   done
   if ! ctl_alive; then
-    hnote "voice: engine did not come up" "see ~/.cache/herdr-voice/engine-local.log or engine.log on $HANDS_HOST"
+    hnote "voice: engine did not come up on $WANT" "see ~/.cache/herdr-voice/engine*.log (there or here)"
+    log "engine did not come up on $WANT"
     exit 1
   fi
+  log "engine up: owner=$(ctl_owner)"
 fi
+
+(( NO_HUD )) && { print -r -- "engine up: owner=$(ctl_owner)"; exit 0 }
 
 # Open the HUD. Prefer the non-modal floating placement (fork feature 7);
 # servers without it reject the field -> fall back to the modal popup.

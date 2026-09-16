@@ -84,6 +84,53 @@ check('playback does NOT pass -ac, which ffplay rejects', !play.includes('-ac'),
 check('playback sets the channel count the way ffplay accepts', play.join(' ').includes('-ch_layout mono'))
 check('playback reads raw PCM16 from the pipe at the session rate', play.join(' ').includes('-f s16le -ar 24000'))
 
+
+
+// ---- Windows (dshow) seam ----
+// Recorded from `ffmpeg -f dshow -list_devices true -i dummy` on the PC.
+const DSHOW_OUTPUT = `
+[dshow @ 0000022865a15000] "OBS Virtual Camera" (none)
+[dshow @ 0000022865a15000]   Alternative name "@device_sw_{860BB310-5D01-11D0-BD3B-00A0C911CE86}\\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}"
+[dshow @ 0000022865a15000] "Headset Microphone (Fractal Scape Dongle)" (audio)
+[dshow @ 0000022865a15000]   Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{E0DAA23C-8FD8-4523-B2D4-8FC71493DD67}"
+[dshow @ 0000022865a15000] "Microphone (Steam Streaming Microphone)" (audio)
+[dshow @ 0000022865a15000]   Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{C9342CA2-287B-4070-B759-4CF56BFAAF1A}"
+Error opening input file dummy.
+`
+const { parseDshowDevices, deviceSpec } = await import('../../src/audio.js')
+const dshow = parseDshowDevices(DSHOW_OUTPUT)
+check(
+  'dshow: only audio devices are parsed, never the virtual camera',
+  same(dshow, [
+    { index: 0, name: 'Headset Microphone (Fractal Scape Dongle)' },
+    { index: 1, name: 'Microphone (Steam Streaming Microphone)' },
+  ]),
+  JSON.stringify(dshow)
+)
+check(
+  'dshow: the Steam Streaming loopback is never picked over the headset',
+  MicCapture.pickDevice(dshow.slice().reverse())?.name === 'Headset Microphone (Fractal Scape Dongle)',
+  MicCapture.pickDevice(dshow.slice().reverse())?.name
+)
+check(
+  'dshow: only a virtual device present means no microphone',
+  MicCapture.pickDevice([dshow[1]]) === null
+)
+check(
+  'dshow addresses the device by name, avfoundation by index',
+  deviceSpec(dshow[0], 'win32') === 'audio=Headset Microphone (Fractal Scape Dongle)' &&
+    deviceSpec({ index: 2, name: 'x' }, 'darwin') === ':2'
+)
+const winArgs = captureArgs({ device: 'audio=Headset Microphone (Fractal Scape Dongle)', platform: 'win32' })
+check(
+  'win32 capture uses dshow with a short audio buffer and the same PCM16 mono output',
+  winArgs.includes('dshow') &&
+    winArgs[winArgs.indexOf('-audio_buffer_size') + 1] === '50' &&
+    !winArgs.includes('avfoundation') &&
+    winArgs.slice(-7).join(' ') === '-ar 24000 -ac 1 -f s16le -',
+  winArgs.join(' ')
+)
+
 const failed = results.filter((r) => !r).length
 console.log(`\n${results.length - failed}/${results.length} checks passed`)
 console.log(`RESULT: ${failed ? 'FAIL' : 'PASS'}`)

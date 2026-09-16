@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { SAMPLE_RATE } from './config.js'
+import { IS_WIN } from './endpoint.js'
 
 /**
  * Parse the audio devices out of `ffmpeg -f avfoundation -list_devices true`.
@@ -20,12 +21,36 @@ export function parseAvfoundationDevices(stderr) {
   return devices
 }
 
+/**
+ * Parse the audio devices out of `ffmpeg -f dshow -list_devices true -i dummy`
+ * (Windows). Each device is one `"Name" (audio)` line; cameras say `(video)`
+ * or `(none)` and are skipped. dshow addresses devices by NAME, not index —
+ * the index here is only positional.
+ */
+export function parseDshowDevices(stderr) {
+  const devices = []
+  for (const line of String(stderr).split('\n')) {
+    const m = line.match(/"([^"]+)"\s+\((audio|audio, video|video, audio)\)\s*$/)
+    if (m) devices.push({ index: devices.length, name: m[1] })
+  }
+  return devices
+}
+
+/** The `-i` spec ffmpeg wants for a listed device on the given platform. */
+export function deviceSpec(device, platform = process.platform) {
+  return platform === 'win32' ? `audio=${device.name}` : `:${device.index}`
+}
+
 /** ffmpeg arguments for capturing a microphone as PCM16 mono. */
-export function captureArgs({ device, sampleRate = SAMPLE_RATE }) {
+export function captureArgs({ device, sampleRate = SAMPLE_RATE, platform = process.platform }) {
+  const input =
+    platform === 'win32'
+      ? // dshow buffers 500 ms by default — far too laggy for realtime turn-taking
+        ['-f', 'dshow', '-audio_buffer_size', '50', '-i', device]
+      : ['-f', 'avfoundation', '-i', device]
   return [
     '-hide_banner', '-loglevel', 'error',
-    '-f', 'avfoundation',
-    '-i', device,
+    ...input,
     '-ar', String(sampleRate),
     '-ac', '1',
     '-f', 's16le',
@@ -51,14 +76,15 @@ export function playerArgs({ sampleRate = SAMPLE_RATE } = {}) {
 }
 
 /**
- * Mic capture via ffmpeg/avfoundation -> PCM16 mono @24k -> base64 chunks.
+ * Mic capture via ffmpeg -> PCM16 mono @24k -> base64 chunks.
+ * macOS: avfoundation (device `:N`). Windows: dshow (device `audio=<name>`).
  *
  * macOS gates microphone access per-application (TCC). A terminal that has never
  * been granted mic access sees no input devices at all, so we surface that as a
  * clear, actionable error instead of silently sending empty audio.
  */
 export class MicCapture extends EventEmitter {
-  constructor({ device = ':0', chunkMs = 100 } = {}) {
+  constructor({ device = IS_WIN ? undefined : ':0', chunkMs = 100 } = {}) {
     super()
     this.device = device
     this.chunkMs = chunkMs
@@ -69,26 +95,36 @@ export class MicCapture extends EventEmitter {
 
   static async listDevices() {
     return new Promise((resolve) => {
-      const p = spawn('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''])
+      const args = IS_WIN
+        ? ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy']
+        : ['-f', 'avfoundation', '-list_devices', 'true', '-i', '']
+      const p = spawn('ffmpeg', args)
       let buf = ''
       p.stderr.on('data', (d) => (buf += d.toString()))
-      p.on('close', () => resolve(parseAvfoundationDevices(buf)))
+      p.on('close', () => resolve(IS_WIN ? parseDshowDevices(buf) : parseAvfoundationDevices(buf)))
       p.on('error', () => resolve([]))
     })
   }
 
   /**
    * Pick a real microphone, never a virtual loopback. "Microsoft Teams Audio",
-   * BlackHole, etc. enumerate as audio devices but capture silence (or the wrong
-   * thing) — picking one is exactly the "mic connected but hears nothing" trap.
-   * Returns null when only virtual devices exist so the UI can say so honestly.
+   * BlackHole, Steam Streaming, etc. enumerate as audio devices but capture
+   * silence (or the wrong thing) — picking one is exactly the "mic connected but
+   * hears nothing" trap. Returns null when only virtual devices exist so the UI
+   * can say so honestly.
    */
   static pickDevice(devices) {
-    const VIRTUAL = /teams|virtual|blackhole|loopback|soundflower|aggregate|zoomaudio|multi-output/i
-    const PREFERRED = /macbook.*microphone|built-in|external microphone|usb|airpods|studio display/i
+    const VIRTUAL =
+      /teams|virtual|blackhole|loopback|soundflower|aggregate|zoomaudio|multi-output|steam streaming|stereo mix|voicemeeter|vb-audio|cable|obs/i
+    const PREFERRED =
+      /macbook.*microphone|built-in|external microphone|headset|usb|airpods|studio display|microphone/i
     const real = devices.filter((d) => !VIRTUAL.test(d.name))
     if (real.length === 0) return null
     return real.find((d) => PREFERRED.test(d.name)) ?? real[0]
+  }
+
+  static deviceSpec(device) {
+    return deviceSpec(device)
   }
 
   start() {
@@ -115,6 +151,8 @@ export class MicCapture extends EventEmitter {
       const msg = this.stderr.toLowerCase()
       if (msg.includes('permission') || msg.includes('input/output error')) {
         this.emit('error', new Error('microphone unavailable (grant Terminal mic permission)'))
+      } else if (IS_WIN && (msg.includes('could not find') || msg.includes('cannot open'))) {
+        this.emit('error', new Error(`microphone unavailable: ${this.stderr.trim().slice(-160)}`))
       }
     })
     proc.on('error', (e) => this.emit('error', e))

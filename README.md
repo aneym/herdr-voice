@@ -33,6 +33,25 @@ you're sitting at**. If the MacBook is unreachable, a herdr notification says so
 
 **Directly on the MacBook: `herdr-voice-mac`** (also Raycast-able). Same HUD.
 
+### Which machine gets the microphone
+
+`bin/herdr-voice-summon` runs on the herdr server and picks the engine host per
+summon: the machine whose herdr client was opened most recently. Remote clients are
+matched by their `SSH_CLIENT` ip against `~/.config/herdr-voice/hands.conf`
+(`label|ip|ssh_host|kind`, kind = `launchd:<label>` on macOS or `schtask:<TaskName>`
+on Windows); a client with no ssh origin means you are at the server itself. Only one
+engine runs at a time — summoning from a different machine moves it. Pin it with
+`herdr-voice-summon --hands pc` (`--hands auto` to unpin); `--stop` kills the engine.
+
+**Windows hands machine.** The engine runs under `bin/herdr-voice-engine.ps1`
+(hidden via `bin/herdr-voice-engine.vbs`) from a scheduled task registered for the
+console user with an interactive token — audio devices are per-session, so an ssh
+session cannot capture. Needs Node, Gyan.FFmpeg (ffmpeg+ffplay) from winget, and an
+ssh alias `studio` for the console user. Local tunnel ends are loopback TCP
+(`tcp:127.0.0.1:47821` ctl, `:47822` herdr) because OpenSSH for Windows cannot bind a
+local unix socket; the remote ends are the server's unix sockets as on macOS. Mic
+capture is dshow with a 50 ms buffer; clipboard copy uses `clip`.
+
 ### The HUD
 
 A small (58×12) Ghostty window, top-right, floating above everything (title `voice`

@@ -68,10 +68,10 @@ export class TranscriptStore {
   }
 }
 
-/** Copy text to the local clipboard (macOS). Returns true on success. */
+/** Copy text to the local clipboard (pbcopy on macOS, clip on Windows). Returns true on success. */
 export function copyToClipboard(text) {
   return new Promise((resolve) => {
-    const p = spawn('pbcopy')
+    const p = spawn(process.platform === 'win32' ? 'clip' : 'pbcopy')
     p.on('error', () => resolve(false))
     p.on('close', (code) => resolve(code === 0))
     p.stdin.end(text)
