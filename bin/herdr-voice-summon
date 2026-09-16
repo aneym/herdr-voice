@@ -103,7 +103,7 @@ start_engine() {   # $1 = label
   if [[ "$lbl" == "local" ]]; then
     local mic=()
     has_real_mic || mic=(--no-mic)
-    ( nohup node "$APP_DIR/src/engine.js" --owner "$(hostname -s)" "${mic[@]}" > "$RUN/engine-local.log" 2>&1 & ) </dev/null
+    ( nohup node "$APP_DIR/src/engine.js" --owner local "${mic[@]}" > "$RUN/engine-local.log" 2>&1 & ) </dev/null
     return 0
   fi
   kind="${H_KIND[$lbl]:-}"; sshhost="${H_SSH[$lbl]:-}"; name="${kind#*:}"
