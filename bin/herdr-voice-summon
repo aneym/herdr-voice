@@ -50,7 +50,7 @@ ctl_owner() {
 }
 
 # ---- hands registry -------------------------------------------------------
-# label|ip|ssh_host|kind   kind = launchd:<label> | schtask:<TaskName>
+# label|ip[,ip...]|ssh_host|kind   kind = launchd:<label> | schtask:<TaskName>
 typeset -A H_IP H_SSH H_KIND
 if [[ -r "$HANDS_CONF" ]]; then
   while IFS='|' read -r label ip sshhost kind; do
@@ -58,10 +58,12 @@ if [[ -r "$HANDS_CONF" ]]; then
     H_IP[$label]="$ip"; H_SSH[$label]="$sshhost"; H_KIND[$label]="$kind"
   done < "$HANDS_CONF"
 fi
-label_for_ip() {
-  local l
+label_for_ip() {   # ip field may list several addresses, comma-separated
+  local l ip
   for l in "${(@k)H_IP}"; do
-    [[ "${H_IP[$l]}" == "$1" ]] && { print -r -- "$l"; return 0 }
+    for ip in "${(@s:,:)H_IP[$l]}"; do
+      [[ "$ip" == "$1" ]] && { print -r -- "$l"; return 0 }
+    done
   done
   return 1
 }

@@ -38,8 +38,9 @@ you're sitting at**. If the MacBook is unreachable, a herdr notification says so
 `bin/herdr-voice-summon` runs on the herdr server and picks the engine host per
 summon: the machine whose herdr client was opened most recently. Remote clients are
 matched by their `SSH_CLIENT` ip against `~/.config/herdr-voice/hands.conf`
-(`label|ip|ssh_host|kind`, kind = `launchd:<label>` on macOS or `schtask:<TaskName>`
-on Windows); a client with no ssh origin means you are at the server itself. Only one
+(`label|ip[,ip...]|ssh_host|kind`, kind = `launchd:<label>` on macOS or
+`schtask:<TaskName>` on Windows; the label must equal the engine's owner, which
+defaults to the short hostname); a client with no ssh origin means you are at the server itself. Only one
 engine runs at a time — summoning from a different machine moves it. Pin it with
 `herdr-voice-summon --hands pc` (`--hands auto` to unpin); `--stop` kills the engine.
 
